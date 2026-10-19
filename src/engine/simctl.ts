@@ -2,6 +2,7 @@ import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { withCloudHint } from "../cloud-hint.ts";
 import { ToolError } from "../errors.ts";
 import { run } from "./exec.ts";
 
@@ -56,14 +57,14 @@ const CACHE_MS = 5_000;
 let cached: { at: number; devices: Device[] } | undefined;
 
 export async function listDevices(fresh = false): Promise<Device[]> {
-  if (process.platform !== "darwin") throw new ToolError(NO_SIMULATOR);
+  if (process.platform !== "darwin") throw new ToolError(NO_SIMULATOR, withCloudHint("Run simtap on a Mac with Xcode."));
   if (!fresh && cached && Date.now() - cached.at < CACHE_MS) return cached.devices;
   try {
     const { stdout } = await run("xcrun", ["simctl", "list", "devices", "--json"], { timeoutMs: 20_000 });
     cached = { at: Date.now(), devices: parseDevices(stdout) };
     return cached.devices;
   } catch (error) {
-    throw new ToolError(`${NO_SIMULATOR} (${(error as Error).message})`, "Install Xcode from the App Store, open it once, then add an iOS Simulator runtime in Settings > Components.");
+    throw new ToolError(`${NO_SIMULATOR} (${(error as Error).message})`, withCloudHint("Install Xcode from the App Store, open it once, then add an iOS Simulator runtime in Settings > Components."));
   }
 }
 

@@ -1,3 +1,4 @@
+import { withCloudHint } from "../cloud-hint.ts";
 import { listDevices, xcodeVersion } from "../engine/simctl.ts";
 import type { Tool } from "./types.ts";
 
@@ -16,7 +17,7 @@ export const devices: Tool = {
     for (const d of list.slice(0, MAX_LINES)) lines.push(`${d.booted ? "booted " : ""}${d.name} · ${d.runtime} · ${d.udid}`);
     if (list.length > MAX_LINES) lines.push(`… ${list.length - MAX_LINES} more (xcrun simctl list devices)`);
     const booted = list.filter((d) => d.booted);
-    if (!list.length) lines.push("No Simulators. Add an iOS runtime in Xcode > Settings > Components.");
+    if (!list.length) lines.push(`No Simulators. ${withCloudHint("Add an iOS runtime in Xcode > Settings > Components.")}`);
     else if (!booted.length) lines.push(`None booted. Boot one: xcrun simctl boot ${list[0]!.udid}`);
     else if (booted.length > 1) lines.push("Several are booted: pass device (name or UDID) to the other tools.");
     return { text: lines.join("\n") };

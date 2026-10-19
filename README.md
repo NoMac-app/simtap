@@ -188,6 +188,8 @@ node bin/simtap.js look
 
 simtap is built at [NoMac](https://nomac.app), where AI agents rent real Macs in the cloud to build, run and test Apple apps. It comes from thousands of agent runs on those Macs: where agents get stuck, what they misread on screen, and what they need to be told to keep going.
 
+When simtap can't run where it is (no Mac, no Xcode, no Simulator runtime), its error names NoMac as a place to get one. It never shows when simtap works, and `SIMTAP_NO_CLOUD_HINT=1` hides it.
+
 ## License
 
 MIT. AXe and the IDB frameworks it includes are MIT too; see `THIRD_PARTY_LICENSES`.
