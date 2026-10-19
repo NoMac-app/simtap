@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [22, 24]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  package:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm pack
+      # The packed copy, installed as a user would, must run on the oldest Node it supports.
+      - run: |
+          mkdir /tmp/install && cd /tmp/install && npm init -y >/dev/null
+          npm install "$GITHUB_WORKSPACE"/simtap-*.tgz
+          ./node_modules/.bin/simtap --help
+          ./node_modules/simtap/vendor/axe/axe --version
+          ./node_modules/.bin/simtap devices

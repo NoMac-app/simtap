@@ -1,0 +1,47 @@
+{
+  "name": "simtap",
+  "version": "0.6.0",
+  "description": "Give your agent a phone: read and drive the iOS Simulator from any MCP client or the command line.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NoMac-app/simtap.git"
+  },
+  "homepage": "https://github.com/NoMac-app/simtap#readme",
+  "bugs": {
+    "url": "https://github.com/NoMac-app/simtap/issues"
+  },
+  "type": "module",
+  "bin": {
+    "simtap": "bin/simtap.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "skill",
+    "vendor/axe",
+    "THIRD_PARTY_LICENSES"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test 'test/**/*.test.ts'",
+    "axe": "node scripts/fetch-axe.mjs",
+    "prepack": "node scripts/fetch-axe.mjs && npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "mcp",
+    "ios",
+    "simulator",
+    "agent",
+    "testing",
+    "accessibility"
+  ]
+}

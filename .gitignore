@@ -1,0 +1,6 @@
+node_modules/
+dist/
+vendor/axe/
+*.xcodeproj/
+DerivedData/
+.DS_Store

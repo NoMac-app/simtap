@@ -1,0 +1,27 @@
+name: EdgeLab
+options:
+  bundleIdPrefix: dev.simtap
+  deploymentTarget:
+    iOS: "18.0"
+targets:
+  EdgeLab:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.simtap.edgelab
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: "EdgeLab shows where you are."
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "EdgeLab picks a photo."
+        INFOPLIST_KEY_NSCameraUsageDescription: "EdgeLab takes a photo."
+        INFOPLIST_KEY_NSContactsUsageDescription: "EdgeLab finds a friend."
+        CODE_SIGNING_ALLOWED: NO
+        SWIFT_VERSION: "6.0"
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLSchemes: [edgelab]
+        UILaunchScreen: {}

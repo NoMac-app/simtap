@@ -1,0 +1,303 @@
+{"app_name": "Demo", "timestamp": "2026-10-19 01:58:18.00 +0200", "bundleID": "dev.simtap.demo", "bug_type": "309"}
+{
+ "captureTime": "2026-10-19 01:58:10.9259 +0200",
+ "exception": {
+  "codes": "0x0000000000000001, 0x0000000198272210",
+  "rawCodes": [
+   1,
+   6847668752
+  ],
+  "type": "EXC_BREAKPOINT",
+  "signal": "SIGTRAP"
+ },
+ "termination": {
+  "indicator": "Trace/BPT trap: 5",
+  "namespace": "SIGNAL",
+  "code": 5
+ },
+ "faultingThread": 0,
+ "threads": [
+  {
+   "triggered": true,
+   "frames": [
+    {
+     "imageIndex": 69,
+     "symbol": "_assertionFailure(_:_:file:line:flags:)",
+     "imageOffset": 1053200
+    },
+    {
+     "imageIndex": 2,
+     "symbol": "closure #1 in closure #2 in closure #1 in ItemsView.body.getter",
+     "imageOffset": 28396,
+     "sourceFile": "App.swift",
+     "sourceLine": 64
+    },
+    {
+     "imageIndex": 70,
+     "symbol": "<deduplicated_symbol>",
+     "imageOffset": 7344632
+    },
+    {
+     "imageIndex": 70,
+     "symbol": "specialized static MainActor.assumeIsolated<A>(_:file:line:)",
+     "imageOffset": 14740316
+    },
+    {
+     "imageIndex": 70,
+     "symbol": "ButtonAction.callAsFunction()",
+     "imageOffset": 14515936
+    },
+    {
+     "imageIndex": 70,
+     "symbol": "<deduplicated_symbol>",
+     "imageOffset": 738912
+    },
+    {
+     "imageIndex": 70,
+     "symbol": "<deduplicated_symbol>",
+     "imageOffset": 7344632
+    },
+    {
+     "imageIndex": 70,
+     "symbol": "specialized static MainActor.assumeIsolated<A>(_:file:line:)",
+     "imageOffset": 14740316
+    },
+    {
+     "imageIndex": 70,
+     "symbol": "ButtonAction.callAsFunction()",
+     "imageOffset": 14515936
+    },
+    {
+     "imageIndex": 70,
+     "symbol": "<deduplicated_symbol>",
+     "imageOffset": 738912
+    },
+    {
+     "imageIndex": 70,
+     "symbol": "ButtonBehavior.ended()",
+     "imageOffset": 6919956
+    },
+    {
+     "imageIndex": 70,
+     "symbol": "partial apply for implicit closure #2 in implicit closure #1 in ButtonBehavior.body.getter",
+     "imageOffset": 6943532
+    }
+   ]
+  }
+ ],
+ "usedImages": [
+  {
+   "name": "Demo"
+  },
+  {
+   "name": "dyld_sim"
+  },
+  {
+   "name": "Demo.debug.dylib"
+  },
+  {
+   "name": "libsystem_platform.dylib"
+  },
+  {
+   "name": "libsystem_kernel.dylib"
+  },
+  {
+   "name": "libsystem_pthread.dylib"
+  },
+  {
+   "name": "libobjc-trampolines.dylib"
+  },
+  {
+   "name": "AccessibilitySettingsLoader"
+  },
+  {
+   "name": "AXGuestPassServices"
+  },
+  {
+   "name": "AccessibilityUI"
+  },
+  {
+   "name": "AccessibilityUIShared"
+  },
+  {
+   "name": "UIKit"
+  },
+  {
+   "name": "SpeakTypingServices"
+  },
+  {
+   "name": "AXFrontBoardUtils"
+  },
+  {
+   "name": "SpeakThisServices"
+  },
+  {
+   "name": "GeoServices"
+  },
+  {
+   "name": "VectorKit"
+  },
+  {
+   "name": "MapKitFramework"
+  },
+  {
+   "name": "AVKit"
+  },
+  {
+   "name": "PreferencesFramework"
+  },
+  {
+   "name": "AVFoundation"
+  },
+  {
+   "name": "PrintKitUI"
+  },
+  {
+   "name": "SwiftUI"
+  },
+  {
+   "name": "Pegasus"
+  },
+  {
+   "name": "StoreKitFramework"
+  },
+  {
+   "name": "MessageUIFramework"
+  },
+  {
+   "name": "LocalAuthenticationPrivateUI"
+  },
+  {
+   "name": "PencilKit"
+  },
+  {
+   "name": "MapKitSwiftUI"
+  },
+  {
+   "name": "WebUI"
+  },
+  {
+   "name": "AuthKitUI"
+  },
+  {
+   "name": "CameraEditKitFramework"
+  },
+  {
+   "name": "VisionKitCore"
+  },
+  {
+   "name": "TelephonyUIFramework"
+  },
+  {
+   "name": "FrontBoard"
+  },
+  {
+   "name": "OnBoardingKit"
+  },
+  {
+   "name": "BannerKit"
+  },
+  {
+   "name": "WebCore"
+  },
+  {
+   "name": "SafariSharedUI"
+  },
+  {
+   "name": "LinkPresentation"
+  },
+  {
+   "name": "MediaPlayerFramework"
+  },
+  {
+   "name": "HelpKit"
+  },
+  {
+   "name": "RealityFoundation"
+  },
+  {
+   "name": "WebKit"
+  },
+  {
+   "name": "EventKitUIFramework"
+  },
+  {
+   "name": "ContactsUI"
+  },
+  {
+   "name": "BaseBoardUI"
+  },
+  {
+   "name": "PhotosFramework"
+  },
+  {
+   "name": "DocumentManager"
+  },
+  {
+   "name": "MobileSafariFramework"
+  },
+  {
+   "name": "iTunesStoreFramework"
+  },
+  {
+   "name": "TemplateKit"
+  },
+  {
+   "name": "RemoteUIFramework"
+  },
+  {
+   "name": "ProxCardKit"
+  },
+  {
+   "name": "SearchFoundation"
+  },
+  {
+   "name": "SpringBoardUIServices"
+  },
+  {
+   "name": "SpringBoardFoundation"
+  },
+  {
+   "name": "SafariServices"
+  },
+  {
+   "name": "ContactsAutocompleteUI"
+  },
+  {
+   "name": "AuthenticationServices"
+  },
+  {
+   "name": "AssistantServices"
+  },
+  {
+   "name": "ShareSheet"
+  },
+  {
+   "name": "WebKitLegacy"
+  },
+  {
+   "name": "PDFKit"
+  },
+  {
+   "name": "IntentsUI"
+  },
+  {
+   "name": "PhotoLibraryServices"
+  },
+  {
+   "name": "CoverSheetKit"
+  },
+  {
+   "name": "AnnotationKit"
+  },
+  {
+   "name": "dyld"
+  },
+  {
+   "name": "libswiftCore.dylib"
+  },
+  {
+   "name": "SwiftUI"
+  }
+ ]
+}

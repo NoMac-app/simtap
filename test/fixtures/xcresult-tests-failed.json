@@ -1,0 +1,66 @@
+{
+ "testNodes": [
+  {
+   "children": [
+    {
+     "children": [
+      {
+       "children": [
+        {
+         "name": "SignInTests.swift:18: Expectation failed: (signInMessage(email: \"gary@x\", password: \"secret1\") \u2192 \"Welcome, gary@x\") == \"Invalid email or password\"",
+         "nodeType": "Failure Message"
+        }
+       ],
+       "duration": "0.0065s",
+       "durationInSeconds": 0.006491899490356445,
+       "name": "rejectsAnEmailWithoutAt()",
+       "nodeIdentifier": "rejectsAnEmailWithoutAt()",
+       "nodeIdentifierURL": "test://com.apple.xcode/Demo/DemoTests/rejectsAnEmailWithoutAt()",
+       "nodeType": "Test Case",
+       "result": "Failed"
+      },
+      {
+       "children": [
+        {
+         "children": [
+          {
+           "name": "SignInTests.swift:12: XCTAssertEqual failed: (\"Welcome, gary@example.com\") is not equal to (\"Invalid email or password\")",
+           "nodeType": "Failure Message"
+          }
+         ],
+         "duration": "0.23s",
+         "durationInSeconds": 0.23395705223083496,
+         "name": "testRejectsAShortPassword()",
+         "nodeIdentifier": "SignInTests/testRejectsAShortPassword()",
+         "nodeIdentifierURL": "test://com.apple.xcode/Demo/DemoTests/SignInTests/testRejectsAShortPassword",
+         "nodeType": "Test Case",
+         "result": "Failed"
+        },
+        {
+         "duration": "0.00049s",
+         "durationInSeconds": 0.0004870891571044922,
+         "name": "testWelcomesAValidEmail()",
+         "nodeIdentifier": "SignInTests/testWelcomesAValidEmail()",
+         "nodeIdentifierURL": "test://com.apple.xcode/Demo/DemoTests/SignInTests/testWelcomesAValidEmail",
+         "nodeType": "Test Case",
+         "result": "Passed"
+        }
+       ],
+       "name": "SignInTests",
+       "nodeIdentifierURL": "test://com.apple.xcode/Demo/DemoTests/SignInTests",
+       "nodeType": "Test Suite",
+       "result": "Failed"
+      }
+     ],
+     "name": "DemoTests",
+     "nodeIdentifierURL": "test://com.apple.xcode/Demo/DemoTests",
+     "nodeType": "Unit test bundle",
+     "result": "Failed"
+    }
+   ],
+   "name": "Demo",
+   "nodeType": "Test Plan",
+   "result": "Failed"
+  }
+ ]
+}

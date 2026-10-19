@@ -1,0 +1,130 @@
+import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+
+import { getJob, startJob, waitFor } from "../src/engine/jobs.ts";
+import { findProject, formatIssue, parseIssue } from "../src/engine/xcode.ts";
+import { ToolError } from "../src/errors.ts";
+
+test("xcodebuild lines become errors and warnings with their place", () => {
+  assert.deepEqual(parseIssue("/Users/me/app/Sources/App.swift:49:37: error: cannot convert value of type 'ClosedRange<Int>' to specified type '[String]'"), {
+    file: "/Users/me/app/Sources/App.swift",
+    line: 49,
+    column: 37,
+    severity: "error",
+    message: "cannot convert value of type 'ClosedRange<Int>' to specified type '[String]'",
+  });
+  assert.equal(parseIssue("/Users/me/app/Sources/App.swift:12:5: warning: variable 'x' was never used")?.severity, "warning");
+  assert.deepEqual(parseIssue("xcodebuild: error: Unable to find a destination matching the provided destination specifier"), {
+    severity: "error",
+    message: "Unable to find a destination matching the provided destination specifier",
+  });
+  assert.equal(parseIssue("ld: library 'Pods-Demo' not found")?.severity, "error");
+  assert.equal(parseIssue("CompileSwift normal arm64 /Users/me/app/Sources/App.swift"), undefined);
+  assert.equal(parseIssue("** BUILD FAILED **"), undefined);
+});
+
+test("issues read relative to the project, absolute outside it", () => {
+  const issue = { file: "/Users/me/app/Sources/App.swift", line: 49, column: 37, severity: "error" as const, message: "boom" };
+  assert.equal(formatIssue(issue, "/Users/me/app"), "Sources/App.swift:49:37: error: boom");
+  assert.equal(formatIssue(issue, "/Users/me/other"), "/Users/me/app/Sources/App.swift:49:37: error: boom");
+  assert.equal(formatIssue({ severity: "error", message: "no file" }, "/x"), "error: no file");
+});
+
+test("finding the project: workspace first, then project, then ios/, and a clear word for other kinds", async () => {
+  const root = mkdtempSync(join(tmpdir(), "dl-find-"));
+  const both = join(root, "both");
+  mkdirSync(join(both, "App.xcworkspace"), { recursive: true });
+  mkdirSync(join(both, "App.xcodeproj"), { recursive: true });
+  assert.equal((await findProject(both)).kind, "workspace");
+  const rn = join(root, "rn");
+  mkdirSync(join(rn, "ios", "MyApp.xcodeproj"), { recursive: true });
+  writeFileSync(join(rn, "package.json"), "{}");
+  assert.equal((await findProject(rn)).name, "MyApp");
+  const expo = join(root, "expo");
+  mkdirSync(expo);
+  writeFileSync(join(expo, "app.json"), "{}");
+  await assert.rejects(findProject(expo), (e: unknown) => e instanceof ToolError && /Expo, React Native, Flutter and Capacitor projects are not built by app_run yet/.test(e.message));
+  await assert.rejects(findProject(join(root, "missing")), /does not exist/);
+  const empty = join(root, "empty");
+  mkdirSync(empty);
+  await assert.rejects(findProject(empty), /No Xcode project/);
+});
+
+test("an XcodeGen project is regenerated before each build; when that fails, the existing project is built and the call says so", async () => {
+  const root = mkdtempSync(join(tmpdir(), "simtap-xcodegen-"));
+  // A spec xcodegen can't read (or no xcodegen at all, as on Linux): the regeneration fails either way.
+  const app = join(root, "app");
+  mkdirSync(join(app, "App.xcodeproj"), { recursive: true });
+  writeFileSync(join(app, "project.yml"), "name: [\n");
+  const found = await findProject(app);
+  assert.equal(found.name, "App");
+  assert.match(found.note ?? "", /could not regenerate the project from project\.yml .*so the existing project was built/);
+  const direct = await findProject(join(app, "App.xcodeproj"));
+  assert.match(direct.note ?? "", /could not regenerate/);
+  // With no project yet there is nothing to fall back on.
+  const fresh = join(root, "fresh");
+  mkdirSync(fresh);
+  writeFileSync(join(fresh, "project.yml"), "name: [\n");
+  await assert.rejects(findProject(fresh), (e: unknown) => e instanceof ToolError && /XcodeGen spec \(project\.yml\) but no project/.test(e.message));
+  // A workspace (CocoaPods) is never regenerated.
+  const pods = join(root, "pods");
+  mkdirSync(join(pods, "App.xcworkspace"), { recursive: true });
+  writeFileSync(join(pods, "project.yml"), "name: [\n");
+  assert.equal((await findProject(pods)).note, undefined);
+});
+
+test("a job answers when done, reports progress meanwhile, and says stopped when cancelled", async () => {
+  let release!: () => void;
+  const job = startJob("Slow work", async (p) => {
+    p.step("working");
+    p.line("halfway");
+    let stopped = false;
+    p.setCancel(() => {
+      stopped = true;
+      release();
+    });
+    await new Promise<void>((r) => (release = r));
+    return { text: stopped ? "killed" : "done" };
+  });
+  assert.equal(await waitFor(job, 20), undefined);
+  assert.equal(job.step, "working");
+  assert.deepEqual(job.tail, ["halfway"]);
+  assert.equal(getJob(), job, "the latest job is the default");
+  job.cancel!();
+  const result = await waitFor(job, 1000);
+  assert.match(result!.text, /^Slow work was stopped by job_cancel after \d+ s\.$/);
+  assert.equal(result!.isError, true);
+
+  const quick = startJob("Quick", async () => ({ text: "ok" }));
+  assert.deepEqual(await waitFor(quick, 1000), { text: "ok" });
+  const failing = startJob("Failing", async () => {
+    throw new ToolError("No scheme.", "Pass scheme.");
+  });
+  assert.deepEqual(await waitFor(failing, 1000), { text: "No scheme.\nNext: Pass scheme.", isError: true });
+});
+
+test("test failures from Xcode's result bundle: the test, ready for -only-testing, and file:line with its message", async () => {
+  const { failuresIn, locate } = await import("../src/engine/xcresult.ts");
+  const { readFileSync } = await import("node:fs");
+  const tests = JSON.parse(readFileSync(new URL("fixtures/xcresult-tests-failed.json", import.meta.url), "utf8"));
+  assert.deepEqual(failuresIn(tests.testNodes), [
+    { test: "DemoTests/rejectsAnEmailWithoutAt()", id: "rejectsAnEmailWithoutAt()", message: 'SignInTests.swift:18: Expectation failed: (signInMessage(email: "gary@x", password: "secret1") → "Welcome, gary@x") == "Invalid email or password"' },
+    { test: "DemoTests/SignInTests/testRejectsAShortPassword()", id: "SignInTests/testRejectsAShortPassword()", message: 'SignInTests.swift:12: XCTAssertEqual failed: ("Welcome, gary@example.com") is not equal to ("Invalid email or password")' },
+  ]);
+  // The file name becomes its path in the project when it is unique there.
+  const sample = new URL("../examples/swiftui-demo", import.meta.url).pathname;
+  assert.equal(locate("SignInTests.swift:12: XCTAssertEqual failed", sample), "Tests/SignInTests.swift:12: XCTAssertEqual failed");
+  assert.equal(locate("Nowhere.swift:3: boom", sample), "Nowhere.swift:3: boom");
+  assert.equal(locate("no file here", sample), "no file here");
+});
+
+test("Xcode 27 keeps a failure's place in the test's details: it is found there", async () => {
+  const { sourceLocation } = await import("../src/engine/xcresult.ts");
+  // The shape of `xcresulttool get test-results test-details` on Xcode 27.0 (October 19, 2026).
+  const runs = [{ nodeType: "Device", children: [{ nodeType: "Test Plan Configuration", children: [{ nodeType: "Test Case Run", name: "XCTAssertEqual failed", sourceLocation: { filePath: "/tmp/failing/Tests/SignInTests.swift", lineNumber: 12 } }] }] }];
+  assert.deepEqual(sourceLocation(runs), { filePath: "/tmp/failing/Tests/SignInTests.swift", lineNumber: 12 });
+  assert.equal(sourceLocation([{ nodeType: "Device" }]), undefined);
+});
