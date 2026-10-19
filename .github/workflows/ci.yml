@@ -40,4 +40,6 @@ jobs:
           npm install "$GITHUB_WORKSPACE"/simtap-*.tgz
           ./node_modules/.bin/simtap --help
           ./node_modules/simtap/vendor/axe/axe --version
+          # The runner's Simulator service can take over a minute to start; warm it before asking simtap.
+          xcrun simctl list devices > /dev/null
           ./node_modules/.bin/simtap devices

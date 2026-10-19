@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { NOMAC_URL } from "../src/cloud-hint.ts";
-import { type Device, listDevices, parseDevices, pickDevice, runtimeName } from "../src/engine/simctl.ts";
+import { type Device, listDevices, listError, parseDevices, pickDevice, runtimeName } from "../src/engine/simctl.ts";
 import { ToolError } from "../src/errors.ts";
 
 test("runtime identifiers read as people write them", () => {
@@ -103,4 +103,13 @@ test("where simtap can't run, the next step names a place to get a Mac; SIMTAP_N
   });
   process.env.SIMTAP_NO_CLOUD_HINT = "1";
   await assert.rejects(listDevices(true), (e: unknown) => e instanceof ToolError && e.toText().endsWith("Next: Run simtap on a Mac with Xcode.") && !e.toText().includes("NoMac"));
+});
+
+test("a slow Simulator service is a wait, not a missing Simulator: no pointer elsewhere", () => {
+  const slow = listError(new Error("xcrun simctl: timed out after 30 s")).toText();
+  assert.match(slow, /did not answer within 30 s/);
+  assert.match(slow, /Next: Call again in 30 s\./);
+  assert.ok(!slow.includes("NoMac") && !slow.includes("can't run"));
+  const missing = listError(new Error("xcrun simctl: spawn xcrun ENOENT")).toText();
+  assert.match(missing, /can't run the iOS Simulator/);
 });

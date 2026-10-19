@@ -60,12 +60,23 @@ export async function listDevices(fresh = false): Promise<Device[]> {
   if (process.platform !== "darwin") throw new ToolError(NO_SIMULATOR, withCloudHint("Run simtap on a Mac with Xcode."));
   if (!fresh && cached && Date.now() - cached.at < CACHE_MS) return cached.devices;
   try {
-    const { stdout } = await run("xcrun", ["simctl", "list", "devices", "--json"], { timeoutMs: 20_000 });
+    const { stdout } = await run("xcrun", ["simctl", "list", "devices", "--json"], { timeoutMs: 30_000 });
     cached = { at: Date.now(), devices: parseDevices(stdout) };
     return cached.devices;
   } catch (error) {
-    throw new ToolError(`${NO_SIMULATOR} (${(error as Error).message})`, withCloudHint("Install Xcode from the App Store, open it once, then add an iOS Simulator runtime in Settings > Components."));
+    throw listError(error as Error);
   }
+}
+
+/**
+ * Why simctl gave no device list. A timeout means the Simulator service is still starting (it can take a minute
+ * the first time after a reboot or an Xcode update), not that this computer can't run it.
+ */
+export function listError(error: Error): ToolError {
+  if (/timed out after/.test(error.message)) {
+    return new ToolError("The Simulator service did not answer within 30 s: it can take a minute to start the first time after a reboot or an Xcode update.", "Call again in 30 s.");
+  }
+  return new ToolError(`${NO_SIMULATOR} (${error.message})`, withCloudHint("Install Xcode from the App Store, open it once, then add an iOS Simulator runtime in Settings > Components."));
 }
 
 export async function xcodeVersion(): Promise<string | undefined> {
