@@ -186,7 +186,7 @@ node bin/simtap.js look
 
 ## Made at NoMac
 
-simtap is built at [NoMac](https://nomac.app), where AI agents rent real Macs in the cloud to build, run and test Apple apps. It comes from what we learned running more than a thousand agent sessions and ten thousand commands on those Macs: where agents get stuck, what they misread on screen, and what they need to be told to keep going.
+simtap is built at [NoMac](https://nomac.app), where AI agents rent real Macs in the cloud to build, run and test Apple apps. It comes from thousands of agent runs on those Macs: where agents get stuck, what they misread on screen, and what they need to be told to keep going.
 
 ## License
 
