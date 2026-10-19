@@ -134,6 +134,8 @@ DemoTests/rejectsAnEmailWithoutAt(): Tests/SignInTests.swift:18: Expectation fai
 
 Needs macOS with Xcode and a Simulator runtime, and Node 20 or newer.
 
+**No Mac?** If your agent works on Linux, Windows or in a cloud sandbox, [NoMac](https://nomac.app) gives it a real Mac in the cloud, with Xcode and the iOS Simulator, billed by the minute.
+
 ```sh
 # Claude Code
 claude mcp add simtap -- npx -y simtap mcp
@@ -181,6 +183,10 @@ node bin/simtap.js look
 `examples/edge-lab` is an app with every awkward screen: segments, steppers, sliders, menus, alerts, sheets, full-screen covers, permission prompts, text in any language, autocorrect, late content, toasts, swipe-to-delete, long press, a web view, UIKit and a deep link. `scripts/lab.sh` builds it and runs 26 checks on it.
 
 `SIMTAP_DEBUG=1` prints every step and every program run with its time.
+
+## Made at NoMac
+
+simtap is built at [NoMac](https://nomac.app), where AI agents rent real Macs in the cloud to build, run and test Apple apps. It comes from what we learned running more than a thousand agent sessions and ten thousand commands on those Macs: where agents get stuck, what they misread on screen, and what they need to be told to keep going.
 
 ## License
 

@@ -1,6 +1,6 @@
 {
   "name": "simtap",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Give your agent a phone: read and drive the iOS Simulator from any MCP client or the command line.",
   "license": "MIT",
   "repository": {
