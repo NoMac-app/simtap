@@ -76,7 +76,11 @@ test("an XcodeGen project is regenerated before each build; when that fails, the
   assert.equal((await findProject(pods)).note, undefined);
 });
 
-test("a job answers when done, reports progress meanwhile, and says stopped when cancelled", async () => {
+test("a job answers when done, reports progress meanwhile, and says stopped when cancelled", async (t) => {
+  // waitFor's timer never holds the process open, and this job is a bare promise; a real job holds it with its
+  // child process. Node 22 ends a test whose event loop runs empty, so the test holds it open itself.
+  const hold = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(hold));
   let release!: () => void;
   const job = startJob("Slow work", async (p) => {
     p.step("working");
