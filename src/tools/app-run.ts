@@ -52,7 +52,8 @@ export const appRun: Tool = {
       progress.step("finding the project");
       const { project, scheme, dir, note } = await projectFor(args.path as string | undefined, args.scheme as string | undefined);
       job.title = `Build and run ${scheme}`;
-      const busy = claimProject(project.path, currentJob(job.id)!);
+      const busy = await claimProject(project.path, currentJob(job.id)!);
+      if (typeof busy === "number") return { text: `Another simtap call (process ${busy}) is building ${project.name}; two builds of one project would clash.\nNext: run it again once that one has finished.`, isError: true };
       if (busy) return { text: `${busy.title} is already running for ${project.name}; two builds of one project would clash.\nNext: job_status {job_id: "${busy.id}"} to follow it, or job_cancel it first.`, isError: true };
       const configuration = (args.configuration as string | undefined) ?? "Debug";
       progress.step("choosing the Simulator");

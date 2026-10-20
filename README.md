@@ -88,10 +88,11 @@ textfield "Email" #email @201,194
 ```
 
 - A failed build answers with the errors only, as `Sources/App.swift:49:37: error: ...`, and the path to the full log.
-- Each folder (each git worktree) builds into its own DerivedData, so rebuilds are incremental and worktrees never share products.
+- Each folder (each git worktree) builds into its own DerivedData, so rebuilds are incremental and worktrees never share products. `SIMTAP_CACHE_DIR` puts it on a disk you keep, so the next machine's build is incremental too.
 - An XcodeGen project is regenerated from `project.yml` before each build (skipped when nothing changed), so new files are always in it.
 - The next call in the same folder needs no arguments.
 - An MCP call answers within 40 s; a longer build answers with a job, and `job_status` waits for it. From the CLI, `simtap run` simply waits.
+- Two builds of one project never run at once, also from two processes: the second says which process is building it.
 - Expo, React Native, Flutter and Capacitor builds are not done yet; build them with their own tools, then `app_control install`.
 
 ## Tests
@@ -122,7 +123,19 @@ DemoTests/rejectsAnEmailWithoutAt(): Tests/SignInTests.swift:18: Expectation fai
 - Each agent runs its own MCP server and holds its own Simulator through `device_use`.
 - Boots never overlap, across every simtap process on the Mac: two Simulators booting at once on an 8 GB Mac pushed it into swap for minutes.
 - `SIMTAP_MAX_BOOTED` caps how many run at once; asking for another shuts down the others first.
-- Calls on one Simulator run one at a time, so two agents' steps never interleave.
+- Steps on one Simulator run one at a time, across every simtap process on the Mac, so two agents' or two commands' taps never interleave.
+
+## One command at a time
+
+Agents that run simtap through a shell, a command per call, get the same tools:
+- `simtap use` is remembered: the next command uses that Simulator, also with several booted. `SIMTAP_STATE_DIR` moves simtap's files (default: simtap in the temporary folder).
+- Each command waits for its own work, so there is no job to follow.
+- `simtap call <tool> '<json>'` calls a tool by its MCP name and prints one line of MCP content, `{"content":[...],"isError":true}` on failure, images as base64:
+
+```
+$ simtap call ui_look '{"find":"Sign In"}'
+{"content":[{"type":"text","text":"Demo · Sign In · iPhone 17 Pro (iOS 26.5)\nbutton \"Sign In\" #signIn @201,350"}]}
+```
 
 ## What it can't do yet
 

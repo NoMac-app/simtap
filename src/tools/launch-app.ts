@@ -56,7 +56,7 @@ export async function launchAndLook(device: Device, bundleId: string): Promise<s
       if (render(next) === render(snap)) break;
       snap = next;
     }
-    const late = front(snap.app) ? "" : `\n${name} is not in front yet; call ui_look shortly, or launch again.`;
+    const late = front(snap.app) ? "" : `\n${name} is not in front yet.\nNext: ui_look shortly, or launch again.`;
     return `${launched()}${again}.${late}\n${render(snap, { device: label })}`;
   } catch (error) {
     // The launch worked; only reading the screen isn't possible yet (a first boot's accessibility service took

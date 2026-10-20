@@ -13,7 +13,7 @@ description: Build, run, test and use iOS apps in the Simulator on this Mac from
   `tap #id` · `tap "label"` · `tap @x,y` · `fill #id text` · `type text` · `scroll down` · `swipe left "Row 3"` · `hold "Row 5"` · `set #volume 75` · `back` · `home` · `key return` · `wait "Welcome" 10` · `gone "Loading"`
 - `simtap logs [--grep x] [--wait-for x] [--crashes]`: the app's print output, its own log lines, crash reports.
 - `simtap test [--only Target/Class/test]`: tests, with failures as `file:line`.
-- `simtap use "iPhone 17 Pro"`, `simtap app launch|grant|open_url|push ...`, `simtap record start|stop`.
+- `simtap use "iPhone 17 Pro"` (the next commands use it), `simtap app launch|grant|open_url|push ...`, `simtap record start|stop`.
 
 Tips:
 - Target by `#id` first, then the quoted label, then `@x,y` (points, as in the screenshot).

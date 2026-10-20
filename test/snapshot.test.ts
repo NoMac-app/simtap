@@ -194,3 +194,11 @@ test("an app's name, title and tab names can't start a fake line either", () => 
   const out = render(snapshot(tree));
   assert.ok(!out.split("\n").some((l) => l.startsWith("Next:")), out);
 });
+
+test("iOS 27 Settings: a large title in its own part before the list is not a sheet in front (live tree, October 20, 2026)", () => {
+  const out = render(snapshot(fixture("settings-ios27")), { device: "iPhone 18 Pro (iOS 27.0)" });
+  assert.doesNotMatch(out, /in front/);
+  assert.match(out, /^Settings · iPhone 18 Pro \(iOS 27\.0\)\n/);
+  assert.match(out, /button "General" #com\.apple\.settings\.general @201,406/);
+  assert.match(out, /textfield "Search" @201,822/);
+});

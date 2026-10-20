@@ -1,10 +1,7 @@
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
 import { withCloudHint } from "../cloud-hint.ts";
 import { ToolError } from "../errors.ts";
 import { run } from "./exec.ts";
+import { withLock } from "./lock.ts";
 
 export type Device = {
   udid: string;
@@ -124,50 +121,12 @@ export function pickDevice(devices: Device[], wanted?: string, held?: string): D
 const BOOT_BUDGET_MS = 40_000;
 const LOCK_WAIT_MS = 20_000;
 
-const alive = (pid: number) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-};
-
 /**
- * One boot at a time on this Mac, across every simtap process (each agent runs its own). The lock is a
- * directory, made atomically, holding the owner's pid; a lock whose owner died, or that was left without a pid
- * for 60 s, is taken over; and only its owner removes it.
+ * One boot at a time on this Mac, across every simtap process (each agent runs its own), held in a lock
+ * (lock.ts) that a dead owner's successor takes over.
  */
-async function withBootLock<T>(work: () => Promise<T>): Promise<T> {
-  const dir = join(tmpdir(), "simtap");
-  await mkdir(dir, { recursive: true });
-  const lock = join(dir, "boot.lock.d");
-  const owner = join(lock, "pid");
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  for (;;) {
-    try {
-      await mkdir(lock);
-      await writeFile(owner, String(process.pid));
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const holder = Number(await readFile(owner, "utf8").catch(() => "0"));
-      const age = Date.now() - ((await stat(lock).catch(() => undefined))?.mtimeMs ?? Date.now());
-      // An empty pid is a lock being made right now, unless it has been empty for a minute.
-      if ((holder && !alive(holder)) || (!holder && age > 60_000)) {
-        await rm(lock, { recursive: true, force: true });
-        continue;
-      }
-      if (Date.now() > deadline) throw new ToolError("Another Simulator is still booting, and boots never overlap.", "Call device_use again in 30 s.");
-      await new Promise((r) => setTimeout(r, 500));
-    }
-  }
-  try {
-    return await work();
-  } finally {
-    if (Number(await readFile(owner, "utf8").catch(() => "0")) === process.pid) await rm(lock, { recursive: true, force: true });
-  }
-}
+const withBootLock = <T>(work: () => Promise<T>): Promise<T> =>
+  withLock("boot", LOCK_WAIT_MS, () => new ToolError("Another Simulator is still booting, and boots never overlap.", "Call device_use again in 30 s."), work);
 
 export type Boot = { ms: number; ready: boolean; waitedMs: number; shutDown: string[] };
 

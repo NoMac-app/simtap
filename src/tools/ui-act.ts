@@ -7,6 +7,7 @@ import type { Frame } from "../look/snapshot.ts";
 import { setPasteboard } from "../engine/apps.ts";
 import { batch, elementAt, gesture, pressButton, setSlider, typeStep } from "../engine/axe.ts";
 import { ToolError } from "../errors.ts";
+import { withLock } from "../engine/lock.ts";
 import { listDevices, pickDevice } from "../engine/simctl.ts";
 import { heldDevice } from "../engine/state.ts";
 import { readScreen, settle } from "../look/read.ts";
@@ -37,9 +38,11 @@ class StepFailure extends Error {
 }
 
 /**
- * Calls on one Simulator from this server run one at a time. Each agent runs its own server, so two agents on one
- * Simulator can still interleave: device_use gives each its own.
+ * Calls on one Simulator run one at a time: in order within this process, and through a lock across simtap
+ * processes (each CLI call is its own), so two commands' taps never interleave. Two agents should still each
+ * have their own Simulator (device_use).
  */
+const ACT_LOCK_WAIT_MS = { cli: 60_000, mcp: 25_000 };
 const queues = new Map<string, Promise<unknown>>();
 function exclusive<T>(udid: string, work: () => Promise<T>): Promise<T> {
   const turn = (queues.get(udid) ?? Promise.resolve()).catch(() => undefined).then(work);
@@ -421,9 +424,16 @@ export const uiAct: Tool = {
   },
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   command: "act",
-  async run(args) {
+  async run(args, context) {
     const device = pickDevice(await listDevices(), args.device as string | undefined, heldDevice());
     const called = Date.now();
-    return exclusive(device.udid, () => act(device.udid, `${device.name} (${device.runtime})`, args.steps as string[], called));
+    const label = `${device.name} (${device.runtime})`;
+    const busy = (holder: number) => new ToolError(`Another simtap call (process ${holder}) is still acting on ${label}.`, "Call ui_act again once it has finished.");
+    // An MCP call answers within 45 s of its start, waiting included. A CLI command has no client timing it, so
+    // its 45 s start once the Simulator is its own: a command queued behind another is not cut short.
+    const cli = context.waitForJobs;
+    return exclusive(device.udid, () =>
+      withLock(`act-${device.udid}`, cli ? ACT_LOCK_WAIT_MS.cli : ACT_LOCK_WAIT_MS.mcp, busy, () => act(device.udid, label, args.steps as string[], cli ? Date.now() : called)),
+    );
   },
 };

@@ -47,6 +47,13 @@ export function argumentProblem(tool: Tool, args: Record<string, unknown>): stri
   return null;
 }
 
+/** A result as MCP content: its text, then its image when it has one. */
+export function toContent(out: ToolResult): { content: unknown[]; isError?: true } {
+  const content: unknown[] = [{ type: "text", text: out.text }];
+  if (out.image) content.push({ type: "image", data: out.image.data.toString("base64"), mimeType: out.image.mimeType });
+  return out.isError ? { content, isError: true } : { content };
+}
+
 /** Runs a tool. Failures come back as a result the agent reads, with the next step; only bugs throw. */
 export async function callTool(name: string, args: Record<string, unknown> = {}, context: CallContext = { waitForJobs: false }): Promise<ToolResult> {
   const tool = TOOLS.find((t) => t.name === name);

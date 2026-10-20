@@ -4,8 +4,10 @@ import type { Tool } from "./types.ts";
 
 const WAIT_MS = 40_000;
 
-const find = (id: unknown) => {
+const find = (id: unknown, cli: boolean) => {
   const job = getJob(id as string | undefined);
+  // A CLI command waits for its own work, so it never leaves a job behind.
+  if (!job && cli) throw new ToolError("On the command line each command waits for its work to end, so there is no job to follow.", "Run the command again to repeat the work.");
   if (!job) throw new ToolError(id ? `No job ${id} in this server.` : "No job has been started.", "Jobs live as long as this MCP server; start the work again if it restarted.");
   return job;
 };
@@ -22,8 +24,8 @@ export const jobStatus: Tool = {
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   command: "job",
   positional: ["job_id"],
-  async run(args) {
-    const job = find(args.job_id);
+  async run(args, context) {
+    const job = find(args.job_id, context.waitForJobs);
     const done = await waitFor(job, WAIT_MS);
     if (done) return done;
     const tail = job.tail.slice(-5).join("\n");
@@ -45,8 +47,8 @@ export const jobCancel: Tool = {
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   command: "cancel",
   positional: ["job_id"],
-  async run(args) {
-    const job = find(args.job_id);
+  async run(args, context) {
+    const job = find(args.job_id, context.waitForJobs);
     if (job.result) return { text: `${job.title} had already ${job.cancelled ? "been stopped" : "finished"}.` };
     if (!job.cancel) return { text: `${job.title} is ${job.step} and can't be stopped at this step; it ends on its own.` };
     job.cancel();

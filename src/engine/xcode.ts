@@ -2,11 +2,11 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createWriteStream, existsSync, readdirSync, realpathSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 
 import { ToolError } from "../errors.ts";
 import { run } from "./exec.ts";
+import { stateDir } from "./state.ts";
 
 export type Project = { kind: "workspace" | "project"; path: string; name: string; dir: string; generated?: boolean; note?: string };
 
@@ -112,10 +112,16 @@ export function formatIssue(issue: Issue, base: string): string {
   return `${issue.file ? `${place(issue.file, issue.line, issue.column, base)}: ` : ""}${issue.severity}: ${issue.message}`;
 }
 
+/**
+ * Where builds keep their products: SIMTAP_CACHE_DIR when set (a disk kept between machines, such as
+ * NoMac's ~/drive, makes the next machine's build incremental), else simtap's own folder.
+ */
+export const cacheDir = () => process.env.SIMTAP_CACHE_DIR || stateDir();
+
 /** Each worktree builds into its own DerivedData, so builds stay incremental and never share products. */
 export function derivedDataFor(project: Project): string {
   const key = createHash("sha1").update(project.path).digest("hex").slice(0, 12);
-  return join(tmpdir(), "simtap", "DerivedData", `${project.name}-${key}`);
+  return join(cacheDir(), "DerivedData", `${project.name}-${key}`);
 }
 
 export type BuildResult = { ok: boolean; errors: Issue[]; warnings: number; log: string; ms: number; tail: string[] };
@@ -201,7 +207,7 @@ export function builtApp(project: Project, scheme: string, configuration = "Debu
 export type Remembered = { project: string; scheme: string; bundleId?: string };
 
 const memoryFile = async (dir: string) => {
-  const folder = join(tmpdir(), "simtap", "projects");
+  const folder = join(stateDir(), "projects");
   await mkdir(folder, { recursive: true });
   return join(folder, `${createHash("sha1").update(resolve(dir)).digest("hex").slice(0, 16)}.json`);
 };
@@ -221,15 +227,15 @@ export async function remember(dir: string, value: Remembered): Promise<void> {
 /** The project the last app_run or tests_run used, for calls that name none from a folder without one. */
 export async function lastProject(): Promise<string | undefined> {
   try {
-    return (JSON.parse(await readFile(join(tmpdir(), "simtap", "last-project.json"), "utf8")) as { project: string }).project;
+    return (JSON.parse(await readFile(join(stateDir(), "last-project.json"), "utf8")) as { project: string }).project;
   } catch {
     return undefined;
   }
 }
 
 export async function setLastProject(project: string): Promise<void> {
-  await mkdir(join(tmpdir(), "simtap"), { recursive: true });
-  await writeFile(join(tmpdir(), "simtap", "last-project.json"), JSON.stringify({ project }));
+  await mkdir(stateDir(), { recursive: true });
+  await writeFile(join(stateDir(), "last-project.json"), JSON.stringify({ project }));
 }
 
 /**

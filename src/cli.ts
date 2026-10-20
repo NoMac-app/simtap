@@ -7,8 +7,9 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { persistHeld } from "./engine/state.ts";
 import { serve } from "./mcp.ts";
-import { callTool, TOOLS, VERSION } from "./registry.ts";
+import { callTool, toContent, TOOLS, VERSION } from "./registry.ts";
 import type { Tool } from "./tools/types.ts";
 
 const flag = (name: string) => `--${name.replace(/_/g, "-")}`;
@@ -57,6 +58,51 @@ export function usage(tool: Tool): string {
   return `Usage: simtap ${tool.command}${bare}${options.length ? ` [${options.join("] [")}]` : ""}${words}`;
 }
 
+const quoteWord = (value: string) => (/^[\w@./:#+=,-]+$/.test(value) ? value : JSON.stringify(value));
+
+/** A hint's MCP arguments (`{device: "X", crashes: true}`) as the command's words and options. */
+function commandArgs(tool: Tool, body: string): string[] {
+  const words: string[] = [];
+  const positional = [...(tool.positional ?? [])];
+  for (const [, key, raw] of body.matchAll(/(\w+):\s*("(?:[^"\\]|\\.)*"|[^,]+)/g)) {
+    let value: unknown = raw!.trim();
+    try {
+      value = JSON.parse(value as string);
+    } catch {
+      // A bare word stays as it is.
+    }
+    if (positional[0] === key) {
+      positional.shift();
+      words.push(quoteWord(String(value)));
+    } else if (value === true) words.push(flag(key!));
+    else words.push(`${flag(key!)}${value === false ? "=false" : ` ${quoteWord(String(value))}`}`);
+  }
+  return words;
+}
+
+/**
+ * On the command line a hint names commands, not MCP tools: `device_use {device: "X"}` reads `simtap use X`,
+ * and "pass device" reads "pass --device". Only "Next:" lines change: other lines can hold the app's own text.
+ */
+export function forCommandLine(text: string): string {
+  const byName = new Map(TOOLS.map((t) => [t.name, t]));
+  const options = new Set(TOOLS.flatMap((t) => Object.keys(t.inputSchema.properties)));
+  const tools = new RegExp(`\\b(${TOOLS.map((t) => t.name).join("|")})\\b(?:\\s*\\{([^{}]*)\\})?`, "g");
+  return text
+    .split("\n")
+    .map((line) =>
+      line.startsWith("Next:")
+        ? line
+            .replace(tools, (_match, name: string, body?: string) => {
+              const tool = byName.get(name)!;
+              return ["simtap", tool.command, ...(body ? commandArgs(tool, body) : [])].join(" ");
+            })
+            .replace(/\b([Pp]ass) (\w+)\b/g, (match, verb: string, key: string) => (options.has(key) ? `${verb} ${flag(key)}` : match))
+        : line,
+    )
+    .join("\n");
+}
+
 /** The first sentence of a description, ending in one period. */
 const summary = (description: string) => `${description.split(/\.\s/)[0]!.replace(/\.$/, "")}.`;
 
@@ -68,6 +114,7 @@ export function help(): string {
     "Commands:",
     ...TOOLS.map((t) => `  ${t.command.padEnd(width)}  ${summary(t.description)}`),
     `  ${"mcp".padEnd(width)}  Run the MCP server on stdio.`,
+    `  ${"call".padEnd(width)}  Call a tool by its MCP name with JSON arguments and print one JSON line: simtap call ui_look '{"find":"Sign In"}'.`,
     "",
     "Examples:",
     "  simtap run                      build, install and launch the Xcode project in this folder",
@@ -105,6 +152,9 @@ export async function main(argv: string[]): Promise<number> {
     // The client closed stdin: answer what was in flight, then go, even if a child process still holds a pipe.
     process.exit(0);
   }
+  // From here on each command is its own process: the Simulator chosen with `use` is kept in a file.
+  persistHeld();
+  if (command === "call") return call(rest);
   const tool = TOOLS.find((t) => t.command === command || t.name === command);
   if (!tool) {
     console.error(`Unknown command "${command}".\n\n${help()}`);
@@ -126,6 +176,31 @@ export async function main(argv: string[]): Promise<number> {
     await writeFile(file, out.image.data);
     text += `\nscreenshot: ${file}`;
   }
-  (out.isError ? console.error : console.log)(text);
+  (out.isError ? console.error : console.log)(forCommandLine(text));
+  return out.isError ? 1 : 0;
+}
+
+/**
+ * `simtap call <tool> [json]`: one tool by its MCP name, answered as one line of MCP content
+ * ({content, isError}), images as base64, for programs that run simtap a call at a time.
+ */
+async function call([name, json, ...extra]: string[]): Promise<number> {
+  const fail = (text: string) => {
+    console.log(JSON.stringify(toContent({ text, isError: true })));
+    return 2;
+  };
+  if (!name) return fail(`Usage: simtap call <tool> [json]. Tools: ${TOOLS.map((t) => t.name).join(", ")}.`);
+  if (extra.length) return fail("simtap call takes one JSON object of arguments; quote it as one word.");
+  let args: unknown = {};
+  if (json !== undefined) {
+    try {
+      args = JSON.parse(json);
+    } catch (error) {
+      return fail(`The arguments are not JSON: ${(error as Error).message}.`);
+    }
+  }
+  if (!args || typeof args !== "object" || Array.isArray(args)) return fail("The arguments must be a JSON object, like {\"find\":\"Sign In\"}.");
+  const out = await callTool(name, args as Record<string, unknown>, { waitForJobs: true });
+  console.log(JSON.stringify(toContent(out)));
   return out.isError ? 1 : 0;
 }

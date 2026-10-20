@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
 import type { ToolResult } from "../tools/types.ts";
+import { tryLock } from "./lock.ts";
 
 /**
  * Long work (a build) answers within 40 s with a job, and keeps going in this MCP server's process.
@@ -106,13 +107,23 @@ export async function answer(job: Job, waitForJobs: boolean): Promise<ToolResult
 /** Which running job holds a project: xcodebuild runs in that project's DerivedData, which only one may use. */
 const projects = new Map<string, Job>();
 
-/** Claims a project for a job, or names the job already running there. Released when the job ends. */
-export function claimProject(projectPath: string, job: Job): Job | undefined {
+/**
+ * Claims a project for a job, or names what already builds it: a job of this process, or the pid of another
+ * simtap process (each CLI call is its own). Released when the job ends.
+ */
+export async function claimProject(projectPath: string, job: Job): Promise<Job | number | undefined> {
   const holder = projects.get(projectPath);
   if (holder && !holder.result && holder !== job) return holder;
+  // Claimed here first, so a second call of this process waiting on the lock below names this job.
   projects.set(projectPath, job);
+  const taken = await tryLock(`project-${projectPath}`);
+  if ("holder" in taken) {
+    if (projects.get(projectPath) === job) projects.delete(projectPath);
+    return taken.holder;
+  }
   void job.done.finally(() => {
     if (projects.get(projectPath) === job) projects.delete(projectPath);
+    void taken.release();
   });
   return undefined;
 }

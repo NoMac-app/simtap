@@ -7,7 +7,7 @@
 import { createInterface } from "node:readline";
 
 import { cancelAllJobs } from "./engine/jobs.ts";
-import { callTool, INSTRUCTIONS, TOOLS, VERSION } from "./registry.ts";
+import { callTool, INSTRUCTIONS, toContent, TOOLS, VERSION } from "./registry.ts";
 
 const STATELESS = "2026-07-28";
 const HANDSHAKE_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
@@ -37,10 +37,7 @@ async function result(method: string, params: Record<string, unknown>, stateless
     case "tools/call": {
       const name = typeof params.name === "string" ? params.name : "";
       const args = params.arguments && typeof params.arguments === "object" ? (params.arguments as Record<string, unknown>) : {};
-      const out = await callTool(name, args);
-      const content: unknown[] = [{ type: "text", text: out.text }];
-      if (out.image) content.push({ type: "image", data: out.image.data.toString("base64"), mimeType: out.image.mimeType });
-      return out.isError ? { content, isError: true } : { content };
+      return toContent(await callTool(name, args));
     }
     default:
       throw Object.assign(new Error(`Method not found: ${method}`), { code: -32601 });

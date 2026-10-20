@@ -179,8 +179,11 @@ function frontLayer(roots: AxNode[], screen: Frame): { nodes: AxNode[]; modal?: 
         const large = frame && area(frame) >= area(screen) * 0.5;
         const actionable = [...walkAll([part])].some((n) => isNavBar(n) || CONTROLS.has(kindOf(n, false) ?? ""));
         // Something must be behind it: on an iPad the tab bar is its own part before the screen, and a screen
-        // after a part that only holds tabs is just the screen.
-        const behind = parts.slice(0, i).some((p) => [...walkAll([p])].some((n) => readableOwn(n) && n.subrole !== "AXTabButton" && !isTabBar(n)));
+        // after a part that only holds tabs is just the screen. What it covers is a screen too: iOS 27's large
+        // title is its own small part before the list, and a list after a title strip is just the screen.
+        const behind = parts
+          .slice(0, i)
+          .some((p) => (area(box(p) ?? { x: 0, y: 0, width: 0, height: 0 }) >= area(screen) * 0.3) && [...walkAll([p])].some((n) => readableOwn(n) && n.subrole !== "AXTabButton" && !isTabBar(n)));
         if (large && actionable && behind && ![...walkAll([part])].some(isTabBar)) return { nodes: [part], modal: "screen" };
       }
       return { nodes: roots };
@@ -437,7 +440,8 @@ export type RenderOptions = {
 };
 
 export function render(snap: Snapshot, options: RenderOptions = {}): string {
-  const header = [snap.app, snap.title, options.device].filter(Boolean).map((part) => oneLine(part!)).join(" · ");
+  // A screen titled like its app (Settings · Settings) is named once.
+  const header = [snap.app, snap.title === snap.app ? undefined : snap.title, options.device].filter(Boolean).map((part) => oneLine(part!)).join(" · ");
   let elements = snap.elements;
   const lines = [header];
   if (options.find) {
@@ -445,7 +449,7 @@ export function render(snap: Snapshot, options: RenderOptions = {}): string {
     const matches = (e: Element) => [e.label, e.id, e.value].some((v) => v?.toLowerCase().includes(needle));
     elements = [...elements, ...snap.tabs].filter(matches);
     if (!elements.length) {
-      lines.push(`No element matches ${quote(options.find)} (${snap.elements.length + snap.tabs.length} on screen). Call ui_look without find to see them.`);
+      lines.push(`No element matches ${quote(options.find)} (${snap.elements.length + snap.tabs.length} on screen).\nNext: ui_look without find lists them.`);
       return lines.join("\n");
     }
   }
