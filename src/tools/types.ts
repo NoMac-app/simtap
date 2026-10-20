@@ -28,9 +28,9 @@ export type Tool = {
   inputSchema: JsonSchema;
   /** The four MCP hints; `title` above is the fifth. */
   annotations: { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean };
-  /** The CLI command: `simtap look` for ui_look. An array argument takes the command's positional words. */
+  /** The CLI command: `simulator-use look` for ui_look. An array argument takes the command's positional words. */
   command: string;
-  /** Arguments the CLI also takes as bare words, in order: `simtap app launch dev.example.app`. */
+  /** Arguments the CLI also takes as bare words, in order: `simulator-use app launch dev.example.app`. */
   positional?: string[];
   run: (args: Record<string, unknown>, context: CallContext) => Promise<ToolResult>;
 };

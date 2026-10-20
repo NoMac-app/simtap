@@ -3,9 +3,10 @@ import { bootDevice, findDevice, listDevices, type Device } from "../engine/simc
 import { run } from "../engine/exec.ts";
 import { heldDevice, holdDevice } from "../engine/state.ts";
 import type { Tool } from "./types.ts";
+import { setting } from "../settings.ts";
 
 /** At most this many booted at once when set; a cloud VM sets 1 (a 6-core, 8 GB VM drives one Simulator well). */
-const maxBooted = () => Number(process.env.SIMTAP_MAX_BOOTED) || Infinity;
+const maxBooted = () => Number(setting("MAX_BOOTED")) || Infinity;
 
 const CLEAN_STATUS_BAR = ["--time", "9:41", "--dataNetwork", "wifi", "--wifiMode", "active", "--wifiBars", "3", "--cellularMode", "active", "--cellularBars", "4", "--batteryState", "charged", "--batteryLevel", "100"];
 

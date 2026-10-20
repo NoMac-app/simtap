@@ -1,12 +1,12 @@
 #!/bin/bash
-# The golden tasks on the sample app, with simtap doing everything: boot an iPhone; build, install and launch
+# The golden tasks on the sample app, with simulator-use doing everything: boot an iPhone; build, install and launch
 # in one call; sign in, toggle, open an item, go back, scroll; read the app's logs; find a crash; get a build
 # error and a failing test back as file:line; record a video; and check a wrong password fails loudly.
 # Exits non-zero on any miss.
 # Usage: scripts/golden.sh [simulator name]   (default: iPhone 17 Pro, on the newest runtime)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-DL="node bin/simtap.js"
+DL="node bin/simulator-use.js"
 WANT="${1:-iPhone 17 Pro}"
 OUT="$(mktemp -d)"
 
@@ -30,7 +30,7 @@ expect_failure() { # name, expected pattern, command...: the command must fail, 
 
 check "build, install and launch in one call" "#signIn @|screen can.t be read yet" $DL run examples/swiftui-demo --device "$U"
 # The app this run built: other projects' DerivedData may hold a Demo.app too, so pick it by bundle id.
-APP=$(for a in $(find "${TMPDIR:-/tmp}/simtap/DerivedData" -maxdepth 6 -path '*Debug-iphonesimulator/*.app' -type d); do if [ "$(plutil -extract CFBundleIdentifier raw "$a/Info.plist" 2>/dev/null)" = dev.simtap.demo ]; then echo "$a"; break; fi; done)
+APP=$(for a in $(find "${TMPDIR:-/tmp}/simulator-use/DerivedData" -maxdepth 6 -path '*Debug-iphonesimulator/*.app' -type d); do if [ "$(plutil -extract CFBundleIdentifier raw "$a/Info.plist" 2>/dev/null)" = dev.simtap.demo ]; then echo "$a"; break; fi; done)
 check "install a built app" 'Installed Demo \(dev\.simtap\.demo\)' $DL app install "$APP" --device "$U"
 check "launch answers with the first screen" '#signIn @' $DL app launch dev.simtap.demo --device "$U"
 check "sign in" 'Welcome, gary@example\.com' $DL act --device "$U" "fill #email gary@example.com" "fill #password secret1" "tap #signIn" 'wait "Welcome"'

@@ -37,9 +37,9 @@ jobs:
       # The packed copy, installed as a user would, must run on the oldest Node it supports.
       - run: |
           mkdir /tmp/install && cd /tmp/install && npm init -y >/dev/null
-          npm install "$GITHUB_WORKSPACE"/simtap-*.tgz
-          ./node_modules/.bin/simtap --help
-          ./node_modules/simtap/vendor/axe/axe --version
-          # The runner's Simulator service can take over a minute to start; warm it before asking simtap.
+          npm install "$GITHUB_WORKSPACE"/simulator-use-*.tgz
+          ./node_modules/.bin/simulator-use --help && ./node_modules/.bin/simtap --version
+          ./node_modules/simulator-use/vendor/axe/axe --version
+          # The runner's Simulator service can take over a minute to start; warm it before asking simulator-use.
           xcrun simctl list devices > /dev/null
-          ./node_modules/.bin/simtap devices
+          ./node_modules/.bin/simulator-use devices

@@ -20,7 +20,7 @@ export const TOOLS: Tool[] = [devices, deviceUse, appRun, uiLook, uiAct, appCont
 
 /** How the tools fit together, sent once to MCP clients. */
 export const INSTRUCTIONS = [
-  "simtap drives iOS Simulators on this Mac.",
+  "simulator-use drives iOS Simulators on this Mac.",
   "app_run builds the Xcode project here, installs and launches it, and answers with its first screen (a long build becomes a job for job_status); device_use picks and boots a Simulator; app_control installs, launches and sets permissions; ui_look reads the screen; ui_act taps, types, scrolls and waits, and answers with what changed, so no extra ui_look is needed; app_logs reads the app's output and crashes; tests_run runs the tests; screen_record makes a video for a person.",
   "Target elements by #id when they have one, else by their quoted label, else @x,y.",
   "When an alert or sheet is in front (iOS permission prompts too), ui_look lists only it: answer it with ui_act first.",

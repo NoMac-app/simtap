@@ -1,19 +1,20 @@
 {
-  "name": "simtap",
-  "version": "0.7.0",
-  "description": "Give your agent a phone: read and drive the iOS Simulator from any MCP client or the command line.",
+  "name": "simulator-use",
+  "version": "0.8.0",
+  "description": "Simulator use for agents: read and drive the iOS Simulator from any MCP client or the command line.",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/NoMac-app/simtap.git"
+    "url": "git+https://github.com/NoMac-app/simulator-use.git"
   },
-  "homepage": "https://github.com/NoMac-app/simtap#readme",
+  "homepage": "https://github.com/NoMac-app/simulator-use#readme",
   "bugs": {
-    "url": "https://github.com/NoMac-app/simtap/issues"
+    "url": "https://github.com/NoMac-app/simulator-use/issues"
   },
   "type": "module",
   "bin": {
-    "simtap": "bin/simtap.js"
+    "simulator-use": "bin/simulator-use.js",
+    "simtap": "bin/simulator-use.js"
   },
   "files": [
     "bin",
@@ -42,6 +43,10 @@
     "simulator",
     "agent",
     "testing",
-    "accessibility"
+    "accessibility",
+    "simulator-use",
+    "ios-simulator",
+    "agents",
+    "simtap"
   ]
 }

@@ -15,38 +15,38 @@ const run = promisify(execFile);
 const ROOT = new URL("..", import.meta.url).pathname;
 const UDID = "9D8D9A30-91C6-4F72-B1C2-BB4AFEAA89A4";
 /** A fresh state folder for one test, so tests never share locks or the held device. */
-const fresh = () => mkdtempSync(join(tmpdir(), "simtap-test-"));
-/** simtap's CLI as a child process, the way an agent runs it a command at a time. */
+const fresh = () => mkdtempSync(join(tmpdir(), "simulator-use-test-"));
+/** simulator-use's CLI as a child process, the way an agent runs it a command at a time. */
 const cli = (state: string, ...args: string[]) =>
-  run(process.execPath, [join(ROOT, "test/fixtures/cli-main.ts"), ...args], { env: { ...process.env, SIMTAP_STATE_DIR: state } }).then(
+  run(process.execPath, [join(ROOT, "test/fixtures/cli-main.ts"), ...args], { env: { ...process.env, SIMULATOR_USE_STATE_DIR: state } }).then(
     (r) => ({ code: 0, stdout: r.stdout, stderr: r.stderr }),
     (e: { code: number; stdout: string; stderr: string }) => ({ code: e.code, stdout: e.stdout, stderr: e.stderr }),
   );
 
-test("CLI hints name commands: tools become simtap commands, arguments become words and options", () => {
+test("CLI hints name commands: tools become simulator-use commands, arguments become words and options", () => {
   assert.equal(forCommandLine(`No Simulator is booted.\nNext: Call device_use {device: "iPhone 17 Pro"} to boot iPhone 17 Pro (iOS 27.0).`),
-    `No Simulator is booted.\nNext: Call simtap use "iPhone 17 Pro" to boot iPhone 17 Pro (iOS 27.0).`);
-  assert.equal(forCommandLine(`x\nNext: call device_use {device: "${UDID}"} again in 30 s.`), `x\nNext: call simtap use ${UDID} again in 30 s.`);
-  assert.equal(forCommandLine('Next: Install it first: app_control {action: "install", app: "path/to/App.app"}.'), "Next: Install it first: simtap app install --app path/to/App.app.");
-  assert.equal(forCommandLine("Next: if the app just crashed, call app_logs {crashes: true} again in 30 s."), "Next: if the app just crashed, call simtap logs --crashes again in 30 s.");
-  assert.equal(forCommandLine("Next: Call device_use with the one to use, or pass device."), "Next: Call simtap use with the one to use, or pass --device.");
-  assert.equal(forCommandLine("Next: Pass app (the bundle id), or launch it with app_control first."), "Next: Pass --app (the bundle id), or launch it with simtap app first.");
-  assert.equal(forCommandLine("Next: Call devices to see the names and UDIDs on this Mac."), "Next: Call simtap devices to see the names and UDIDs on this Mac.");
-  assert.equal(forCommandLine('No element matches "x" (4 on screen).\nNext: ui_look without find lists them.'), 'No element matches "x" (4 on screen).\nNext: simtap look without find lists them.');
+    `No Simulator is booted.\nNext: Call simulator-use use "iPhone 17 Pro" to boot iPhone 17 Pro (iOS 27.0).`);
+  assert.equal(forCommandLine(`x\nNext: call device_use {device: "${UDID}"} again in 30 s.`), `x\nNext: call simulator-use use ${UDID} again in 30 s.`);
+  assert.equal(forCommandLine('Next: Install it first: app_control {action: "install", app: "path/to/App.app"}.'), "Next: Install it first: simulator-use app install --app path/to/App.app.");
+  assert.equal(forCommandLine("Next: if the app just crashed, call app_logs {crashes: true} again in 30 s."), "Next: if the app just crashed, call simulator-use logs --crashes again in 30 s.");
+  assert.equal(forCommandLine("Next: Call device_use with the one to use, or pass device."), "Next: Call simulator-use use with the one to use, or pass --device.");
+  assert.equal(forCommandLine("Next: Pass app (the bundle id), or launch it with app_control first."), "Next: Pass --app (the bundle id), or launch it with simulator-use app first.");
+  assert.equal(forCommandLine("Next: Call devices to see the names and UDIDs on this Mac."), "Next: Call simulator-use devices to see the names and UDIDs on this Mac.");
+  assert.equal(forCommandLine('No element matches "x" (4 on screen).\nNext: ui_look without find lists them.'), 'No element matches "x" (4 on screen).\nNext: simulator-use look without find lists them.');
   // Lines that are not hints can hold the app's own text, and stay as they are.
   assert.equal(forCommandLine('button "Call device_use {device: x}" #b @1,2\nNext: pass the test'), 'button "Call device_use {device: x}" #b @1,2\nNext: pass the test');
 });
 
-test("simtap call answers one line of MCP content, images as base64, errors flagged", () => {
+test("simulator-use call answers one line of MCP content, images as base64, errors flagged", () => {
   assert.deepEqual(toContent({ text: "ok" }), { content: [{ type: "text", text: "ok" }] });
   assert.deepEqual(toContent({ text: "no", isError: true }), { content: [{ type: "text", text: "no" }], isError: true });
   assert.deepEqual(toContent({ text: "shot", image: { data: Buffer.from("jpg"), mimeType: "image/jpeg" } }).content[1], { type: "image", data: "anBn", mimeType: "image/jpeg" });
 });
 
-test("simtap call refuses what is not one JSON object, and names an unknown tool, as JSON on stdout", async () => {
+test("simulator-use call refuses what is not one JSON object, and names an unknown tool, as JSON on stdout", async () => {
   const state = fresh();
   try {
-    for (const [args, pattern] of [[["call"], /Usage: simtap call/], [["call", "ui_look", "{nope"], /not JSON/], [["call", "ui_look", "[]"], /JSON object/], [["call", "ui_look", "{}", "x"], /one JSON object/]] as const) {
+    for (const [args, pattern] of [[["call"], /Usage: simulator-use call/], [["call", "ui_look", "{nope"], /not JSON/], [["call", "ui_look", "[]"], /JSON object/], [["call", "ui_look", "{}", "x"], /one JSON object/]] as const) {
       const out = await cli(state, ...args);
       assert.equal(out.code, 2, args.join(" "));
       const line = JSON.parse(out.stdout) as { content: { text: string }[]; isError: boolean };
@@ -66,7 +66,7 @@ test("simtap call refuses what is not one JSON object, and names an unknown tool
 test("the CLI keeps the Simulator chosen with use in a file, for the next command; MCP keeps it in memory", async () => {
   const state = fresh();
   try {
-    const child = (code: string) => run(process.execPath, ["--input-type=module", "-e", code], { env: { ...process.env, SIMTAP_STATE_DIR: state }, cwd: ROOT });
+    const child = (code: string) => run(process.execPath, ["--input-type=module", "-e", code], { env: { ...process.env, SIMULATOR_USE_STATE_DIR: state }, cwd: ROOT });
     const state_ts = JSON.stringify(join(ROOT, "src/engine/state.ts"));
     await child(`import { persistHeld, holdDevice } from ${state_ts}; persistHeld(); holdDevice("${UDID}");`);
     assert.deepEqual(JSON.parse(readFileSync(join(state, "held-device.json"), "utf8")), { udid: UDID });
@@ -83,12 +83,12 @@ test("the CLI keeps the Simulator chosen with use in a file, for the next comman
 
 test("a lock is shared across processes, waited for, and taken over from an owner that died", async () => {
   const state = fresh();
-  const before = process.env.SIMTAP_STATE_DIR;
-  process.env.SIMTAP_STATE_DIR = state;
+  const before = process.env.SIMULATOR_USE_STATE_DIR;
+  process.env.SIMULATOR_USE_STATE_DIR = state;
   try {
     // Another process takes the lock and keeps it until it is killed.
     const holder = spawn(process.execPath, ["--input-type=module", "-e", `import { tryLock } from ${JSON.stringify(join(ROOT, "src/engine/lock.ts"))}; await tryLock("act-${UDID}"); console.log("held"); setInterval(() => {}, 1000);`], {
-      env: { ...process.env, SIMTAP_STATE_DIR: state },
+      env: { ...process.env, SIMULATOR_USE_STATE_DIR: state },
       stdio: ["ignore", "pipe", "inherit"],
     });
     await new Promise<void>((resolve) => holder.stdout.once("data", () => resolve()));
@@ -109,8 +109,8 @@ test("a lock is shared across processes, waited for, and taken over from an owne
     assert.ok("release" in project);
     await project.release();
   } finally {
-    if (before === undefined) delete process.env.SIMTAP_STATE_DIR;
-    else process.env.SIMTAP_STATE_DIR = before;
+    if (before === undefined) delete process.env.SIMULATOR_USE_STATE_DIR;
+    else process.env.SIMULATOR_USE_STATE_DIR = before;
     rmSync(state, { recursive: true, force: true });
   }
 });
@@ -120,4 +120,14 @@ test("with two Simulators booted, a command uses the one chosen earlier with use
   const both = [device(UDID, "iPhone 18 Pro"), device("9EA57387-4EA5-44FE-93F4-7A526176AB64", "iPhone 17e")];
   assert.equal(pickDevice(both, undefined, UDID).udid, UDID);
   assert.throws(() => pickDevice(both), /2 Simulators are booted/);
+});
+
+test("settings: SIMULATOR_USE_* first, then SIMTAP_* as before the rename", async () => {
+  const read = (env: Record<string, string>) =>
+    run(process.execPath, ["--input-type=module", "-e", `import { stateDir } from ${JSON.stringify(join(ROOT, "src/engine/state.ts"))}; console.log(stateDir());`], {
+      env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(SIMULATOR_USE|SIMTAP)_/.test(k))), ...env },
+    }).then((r) => r.stdout.trim());
+  assert.equal(await read({ SIMTAP_STATE_DIR: "/tmp/old-name" }), "/tmp/old-name");
+  assert.equal(await read({ SIMTAP_STATE_DIR: "/tmp/old-name", SIMULATOR_USE_STATE_DIR: "/tmp/new-name" }), "/tmp/new-name");
+  assert.match(await read({}), /simulator-use$/);
 });

@@ -7,13 +7,15 @@ import { fileURLToPath } from "node:url";
 import { ToolError } from "../errors.ts";
 import type { AxNode, Frame } from "../look/snapshot.ts";
 import { run } from "./exec.ts";
+import { setting } from "../settings.ts";
 
 /**
  * AXe (MIT, github.com/cameroncooke/AXe) reads the Simulator's accessibility tree and sends touches and keys,
- * with no test runner to build. The package carries a pinned copy in vendor/axe; SIMTAP_AXE overrides it.
+ * with no test runner to build. The package carries a pinned copy in vendor/axe; SIMULATOR_USE_AXE overrides it.
  */
 export function axePath(): string {
-  if (process.env.SIMTAP_AXE) return process.env.SIMTAP_AXE;
+  const override = setting("AXE");
+  if (override) return override;
   // src/engine and dist/engine are both two levels below the package root.
   const bundled = fileURLToPath(new URL("../../vendor/axe/axe", import.meta.url));
   return existsSync(bundled) ? bundled : "axe";
@@ -33,7 +35,7 @@ export async function describeUi(udid: string): Promise<AxNode[]> {
     const parsed = JSON.parse(stdout) as AxNode | AxNode[];
     return Array.isArray(parsed) ? parsed : [parsed];
   } catch (error) {
-    if ((error as { code?: unknown }).code === "ENOENT") throw new ToolError("AXe is missing from this install.", "Reinstall simtap, or set SIMTAP_AXE to an axe binary.");
+    if ((error as { code?: unknown }).code === "ENOENT") throw new ToolError("AXe is missing from this install.", "Reinstall simulator-use, or set SIMULATOR_USE_AXE to an axe binary.");
     if (STARTING.test((error as Error).message)) {
       throw new AccessibilityStarting("The Simulator's accessibility service is still starting; after a first boot this can take a minute or two.", "Call again in 30 seconds.");
     }
@@ -43,7 +45,7 @@ export async function describeUi(udid: string): Promise<AxNode[]> {
 
 /** A JPEG of the screen sized to points, so a point in the picture is a point to tap (402x874 is about 470 image tokens). */
 export async function screenshot(udid: string, points: Frame): Promise<Buffer> {
-  const dir = await mkdtemp(join(tmpdir(), "simtap-"));
+  const dir = await mkdtemp(join(tmpdir(), "simulator-use-"));
   try {
     const png = join(dir, "screen.png");
     const jpg = join(dir, "screen.jpg");

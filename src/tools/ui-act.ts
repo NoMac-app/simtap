@@ -13,6 +13,7 @@ import { heldDevice } from "../engine/state.ts";
 import { readScreen, settle } from "../look/read.ts";
 import { type AxNode, quote, render, type Element, type Snapshot } from "../look/snapshot.ts";
 import type { Tool, ToolResult } from "./types.ts";
+import { setting } from "../settings.ts";
 
 const FIELDS = new Set(["textfield", "securefield", "searchfield", "textview"]);
 /** Long work never blocks a call past 45 s. */
@@ -38,7 +39,7 @@ class StepFailure extends Error {
 }
 
 /**
- * Calls on one Simulator run one at a time: in order within this process, and through a lock across simtap
+ * Calls on one Simulator run one at a time: in order within this process, and through a lock across simulator-use
  * processes (each CLI call is its own), so two commands' taps never interleave. Two agents should still each
  * have their own Simulator (device_use).
  */
@@ -137,7 +138,7 @@ async function act(udid: string, deviceLabel: string, lines: string[], called: n
 
   const firstRead = Date.now();
   let snap = (await readScreen(udid)).snap;
-  if (process.env.SIMTAP_DEBUG) process.stderr.write(`simtap: first read ${Date.now() - firstRead} ms\n`);
+  if (setting("DEBUG")) process.stderr.write(`simulator-use: first read ${Date.now() - firstRead} ms\n`);
   const before = snap;
   const notes: string[] = [];
   // The field typed text goes into: the last field tapped or filled in this call.
@@ -390,7 +391,7 @@ async function act(udid: string, deviceLabel: string, lines: string[], called: n
     try {
       const stepStarted = Date.now();
       await run(steps[i] as Step, i + 1);
-      if (process.env.SIMTAP_DEBUG) process.stderr.write(`simtap: step ${i + 1} ${lines[i]!.trim()} ${Date.now() - stepStarted} ms\n`);
+      if (setting("DEBUG")) process.stderr.write(`simulator-use: step ${i + 1} ${lines[i]!.trim()} ${Date.now() - stepStarted} ms\n`);
     } catch (error) {
       if (!(error instanceof ToolError) && !(error instanceof StepFailure)) throw error;
       const next = error instanceof StepFailure ? error.next : (error.next ?? "Call ui_look to see the screen, then try again.");
@@ -428,7 +429,7 @@ export const uiAct: Tool = {
     const device = pickDevice(await listDevices(), args.device as string | undefined, heldDevice());
     const called = Date.now();
     const label = `${device.name} (${device.runtime})`;
-    const busy = (holder: number) => new ToolError(`Another simtap call (process ${holder}) is still acting on ${label}.`, "Call ui_act again once it has finished.");
+    const busy = (holder: number) => new ToolError(`Another simulator-use call (process ${holder}) is still acting on ${label}.`, "Call ui_act again once it has finished.");
     // An MCP call answers within 45 s of its start, waiting included. A CLI command has no client timing it, so
     // its 45 s start once the Simulator is its own: a command queued behind another is not cut short.
     const cli = context.waitForJobs;

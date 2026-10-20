@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { setting } from "../settings.ts";
 
 export type Output = { stdout: string; stderr: string };
 
@@ -7,8 +8,8 @@ export function run(file: string, args: string[], options: { timeoutMs?: number;
   const started = Date.now();
   return new Promise((resolve, reject) => {
     execFile(file, args, { timeout: options.timeoutMs ?? 30_000, maxBuffer: options.maxBytes ?? 64 * 1024 * 1024, encoding: "utf8" }, (error, stdout, stderr) => {
-      // SIMTAP_DEBUG=1 prints every program run and how long it took, to find where time goes.
-      if (process.env.SIMTAP_DEBUG) process.stderr.write(`simtap:   ${file.split("/").pop()} ${args.slice(0, 2).join(" ")} ${Date.now() - started} ms${error ? " (failed)" : ""}\n`);
+      // SIMULATOR_USE_DEBUG=1 prints every program run and how long it took, to find where time goes.
+      if (setting("DEBUG")) process.stderr.write(`simulator-use:   ${file.split("/").pop()} ${args.slice(0, 2).join(" ")} ${Date.now() - started} ms${error ? " (failed)" : ""}\n`);
       if (!error) return resolve({ stdout, stderr });
       const code = (error as NodeJS.ErrnoException).code;
       const reason =

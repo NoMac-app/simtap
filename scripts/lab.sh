@@ -5,7 +5,7 @@
 # Exits non-zero on any miss. Usage: scripts/lab.sh [simulator name]   (default: iPhone 17 Pro)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-DL="node bin/simtap.js"
+DL="node bin/simulator-use.js"
 WANT="${1:-iPhone 17 Pro}"
 APP=dev.simtap.edgelab
 

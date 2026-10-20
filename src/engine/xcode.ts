@@ -7,6 +7,7 @@ import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { ToolError } from "../errors.ts";
 import { run } from "./exec.ts";
 import { stateDir } from "./state.ts";
+import { setting } from "../settings.ts";
 
 export type Project = { kind: "workspace" | "project"; path: string; name: string; dir: string; generated?: boolean; note?: string };
 
@@ -113,10 +114,10 @@ export function formatIssue(issue: Issue, base: string): string {
 }
 
 /**
- * Where builds keep their products: SIMTAP_CACHE_DIR when set (a disk kept between machines, such as
- * NoMac's ~/drive, makes the next machine's build incremental), else simtap's own folder.
+ * Where builds keep their products: SIMULATOR_USE_CACHE_DIR when set (a disk kept between machines, such as
+ * NoMac's ~/drive, makes the next machine's build incremental), else simulator-use's own folder.
  */
-export const cacheDir = () => process.env.SIMTAP_CACHE_DIR || stateDir();
+export const cacheDir = () => setting("CACHE_DIR") || stateDir();
 
 /** Each worktree builds into its own DerivedData, so builds stay incremental and never share products. */
 export function derivedDataFor(project: Project): string {

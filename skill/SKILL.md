@@ -1,19 +1,19 @@
 ---
-name: simtap
+name: simulator-use
 description: Build, run, test and use iOS apps in the Simulator on this Mac from the command line. Use it to see an app's screen, tap and type in it, check a change works, read its logs and crashes, or run its tests.
 ---
 
-# simtap
+# simulator-use
 
-`npx simtap <command>` drives the iOS Simulator on this Mac.
+`npx simulator-use <command>` drives the iOS Simulator on this Mac.
 
-- `simtap run [folder]`: build the Xcode project, install, launch; prints the first screen, or errors as `file:line`.
-- `simtap look [--find text] [--screenshot]`: the screen, one line per element: `button "Sign In" #signIn @201,350`.
-- `simtap act "step" "step" ...`: do steps in order; prints what changed. Steps:
+- `simulator-use run [folder]`: build the Xcode project, install, launch; prints the first screen, or errors as `file:line`.
+- `simulator-use look [--find text] [--screenshot]`: the screen, one line per element: `button "Sign In" #signIn @201,350`.
+- `simulator-use act "step" "step" ...`: do steps in order; prints what changed. Steps:
   `tap #id` · `tap "label"` · `tap @x,y` · `fill #id text` · `type text` · `scroll down` · `swipe left "Row 3"` · `hold "Row 5"` · `set #volume 75` · `back` · `home` · `key return` · `wait "Welcome" 10` · `gone "Loading"`
-- `simtap logs [--grep x] [--wait-for x] [--crashes]`: the app's print output, its own log lines, crash reports.
-- `simtap test [--only Target/Class/test]`: tests, with failures as `file:line`.
-- `simtap use "iPhone 17 Pro"` (the next commands use it), `simtap app launch|grant|open_url|push ...`, `simtap record start|stop`.
+- `simulator-use logs [--grep x] [--wait-for x] [--crashes]`: the app's print output, its own log lines, crash reports.
+- `simulator-use test [--only Target/Class/test]`: tests, with failures as `file:line`.
+- `simulator-use use "iPhone 17 Pro"` (the next commands use it), `simulator-use app launch|grant|open_url|push ...`, `simulator-use record start|stop`.
 
 Tips:
 - Target by `#id` first, then the quoted label, then `@x,y` (points, as in the screenshot).

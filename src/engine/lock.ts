@@ -17,7 +17,7 @@ const alive = (pid: number) => {
 const lockDir = (name: string) => join(stateDir(), `${/^[\w.-]{1,80}$/.test(name) ? name : createHash("sha1").update(name).digest("hex").slice(0, 16)}.lock.d`);
 
 /**
- * Takes a lock shared by every simtap process on this Mac (each agent, and each CLI call, is its own process).
+ * Takes a lock shared by every simulator-use process on this Mac (each agent, and each CLI call, is its own process).
  * The lock is a directory, made atomically, holding the owner's pid; a lock whose owner died, or that was left
  * without a pid for 60 s, is taken over. Returns its release, or the pid that holds it.
  */

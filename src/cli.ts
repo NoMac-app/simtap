@@ -1,6 +1,6 @@
 /**
  * The command line, built from the same tool list as the MCP server:
- * `simtap look --find "Sign In"` calls ui_look with { find: "Sign In" }.
+ * `simulator-use look --find "Sign In"` calls ui_look with { find: "Sign In" }.
  */
 
 import { writeFile } from "node:fs/promises";
@@ -55,7 +55,7 @@ export function usage(tool: Tool): string {
   const bare = (tool.positional ?? []).map((key) => ` [${key}]`).join("");
   const options = entries.filter(([key, p]) => p.type !== "array" && !tool.positional?.includes(key)).map(([key, p]) => `${flag(key)}${p.type === "boolean" ? "" : ` <${p.type}>`}`);
   const words = entries.filter(([, p]) => p.type === "array").map(([key]) => ` <${key}...>`).join("");
-  return `Usage: simtap ${tool.command}${bare}${options.length ? ` [${options.join("] [")}]` : ""}${words}`;
+  return `Usage: simulator-use ${tool.command}${bare}${options.length ? ` [${options.join("] [")}]` : ""}${words}`;
 }
 
 const quoteWord = (value: string) => (/^[\w@./:#+=,-]+$/.test(value) ? value : JSON.stringify(value));
@@ -81,7 +81,7 @@ function commandArgs(tool: Tool, body: string): string[] {
 }
 
 /**
- * On the command line a hint names commands, not MCP tools: `device_use {device: "X"}` reads `simtap use X`,
+ * On the command line a hint names commands, not MCP tools: `device_use {device: "X"}` reads `simulator-use use X`,
  * and "pass device" reads "pass --device". Only "Next:" lines change: other lines can hold the app's own text.
  */
 export function forCommandLine(text: string): string {
@@ -95,7 +95,7 @@ export function forCommandLine(text: string): string {
         ? line
             .replace(tools, (_match, name: string, body?: string) => {
               const tool = byName.get(name)!;
-              return ["simtap", tool.command, ...(body ? commandArgs(tool, body) : [])].join(" ");
+              return ["simulator-use", tool.command, ...(body ? commandArgs(tool, body) : [])].join(" ");
             })
             .replace(/\b([Pp]ass) (\w+)\b/g, (match, verb: string, key: string) => (options.has(key) ? `${verb} ${flag(key)}` : match))
         : line,
@@ -109,20 +109,20 @@ const summary = (description: string) => `${description.split(/\.\s/)[0]!.replac
 export function help(): string {
   const width = Math.max(...TOOLS.map((t) => t.command.length), 3);
   return [
-    `simtap ${VERSION}: give your agent a phone.`,
+    `simulator-use ${VERSION}: give your agent a phone.`,
     "",
     "Commands:",
     ...TOOLS.map((t) => `  ${t.command.padEnd(width)}  ${summary(t.description)}`),
     `  ${"mcp".padEnd(width)}  Run the MCP server on stdio.`,
-    `  ${"call".padEnd(width)}  Call a tool by its MCP name with JSON arguments and print one JSON line: simtap call ui_look '{"find":"Sign In"}'.`,
+    `  ${"call".padEnd(width)}  Call a tool by its MCP name with JSON arguments and print one JSON line: simulator-use call ui_look '{"find":"Sign In"}'.`,
     "",
     "Examples:",
-    "  simtap run                      build, install and launch the Xcode project in this folder",
-    "  simtap look                     read the screen",
-    '  simtap act "fill #email a@b.co" "tap #signIn" \'wait "Welcome"\'',
-    "  simtap logs --crashes           why did it crash",
+    "  simulator-use run                      build, install and launch the Xcode project in this folder",
+    "  simulator-use look                     read the screen",
+    '  simulator-use act "fill #email a@b.co" "tap #signIn" \'wait "Welcome"\'',
+    "  simulator-use logs --crashes           why did it crash",
     "",
-    "Run simtap <command> --help for its options.",
+    "Run simulator-use <command> --help for its options.",
   ].join("\n");
 }
 
@@ -172,7 +172,7 @@ export async function main(argv: string[]): Promise<number> {
   const out = await callTool(tool.name, args, { waitForJobs: true });
   let text = out.text;
   if (out.image) {
-    const file = join(tmpdir(), `simtap-${Date.now()}.${out.image.mimeType === "image/png" ? "png" : "jpg"}`);
+    const file = join(tmpdir(), `simulator-use-${Date.now()}.${out.image.mimeType === "image/png" ? "png" : "jpg"}`);
     await writeFile(file, out.image.data);
     text += `\nscreenshot: ${file}`;
   }
@@ -181,16 +181,16 @@ export async function main(argv: string[]): Promise<number> {
 }
 
 /**
- * `simtap call <tool> [json]`: one tool by its MCP name, answered as one line of MCP content
- * ({content, isError}), images as base64, for programs that run simtap a call at a time.
+ * `simulator-use call <tool> [json]`: one tool by its MCP name, answered as one line of MCP content
+ * ({content, isError}), images as base64, for programs that run simulator-use a call at a time.
  */
 async function call([name, json, ...extra]: string[]): Promise<number> {
   const fail = (text: string) => {
     console.log(JSON.stringify(toContent({ text, isError: true })));
     return 2;
   };
-  if (!name) return fail(`Usage: simtap call <tool> [json]. Tools: ${TOOLS.map((t) => t.name).join(", ")}.`);
-  if (extra.length) return fail("simtap call takes one JSON object of arguments; quote it as one word.");
+  if (!name) return fail(`Usage: simulator-use call <tool> [json]. Tools: ${TOOLS.map((t) => t.name).join(", ")}.`);
+  if (extra.length) return fail("simulator-use call takes one JSON object of arguments; quote it as one word.");
   let args: unknown = {};
   if (json !== undefined) {
     try {

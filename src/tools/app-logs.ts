@@ -52,7 +52,7 @@ export const appLogs: Tool = {
     const current = await currentApp(device.udid);
     const bundleId = (args.app as string | undefined) ?? current?.bundleId;
     if (bundleId && !BUNDLE_ID.test(bundleId)) throw new ToolError(`"${bundleId}" is not a bundle id.`, "A bundle id looks like com.example.app.");
-    if (!bundleId) throw new ToolError("Which app? simtap has launched none on this Simulator.", "Pass app (the bundle id), or launch it with app_control first.");
+    if (!bundleId) throw new ToolError("Which app? simulator-use has launched none on this Simulator.", "Pass app (the bundle id), or launch it with app_control first.");
     const info = await appInfo(device.udid, bundleId);
     const executable = info?.executable ?? (current?.bundleId === bundleId ? current.executable : undefined);
     if (!executable) throw new ToolError(`${bundleId} is not installed on ${device.name}.`, "Check the bundle id with app_control, or install the app.");

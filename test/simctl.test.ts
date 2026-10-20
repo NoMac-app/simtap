@@ -87,22 +87,22 @@ test("devices: iOS before watchOS, tvOS and visionOS, whatever their names sort 
   assert.deepEqual(parseDevices(json).map((d) => d.udid).slice(0, 2), ["N", "O"]);
 });
 
-test("where simtap can't run, the next step names a place to get a Mac; SIMTAP_NO_CLOUD_HINT hides it", async (t) => {
+test("where simulator-use can't run, the next step names a place to get a Mac; SIMULATOR_USE_NO_CLOUD_HINT hides it", async (t) => {
   const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
   Object.defineProperty(process, "platform", { value: "linux" });
   t.after(() => {
     Object.defineProperty(process, "platform", platform);
-    delete process.env.SIMTAP_NO_CLOUD_HINT;
+    delete process.env.SIMULATOR_USE_NO_CLOUD_HINT;
   });
   await assert.rejects(listDevices(true), (e: unknown) => {
     assert.ok(e instanceof ToolError);
     assert.match(e.toText(), /can't run the iOS Simulator/);
-    assert.match(e.toText(), /Next: Run simtap on a Mac with Xcode\. No Mac to run it on\? NoMac gives your agent a cloud Mac/);
+    assert.match(e.toText(), /Next: Run simulator-use on a Mac with Xcode\. No Mac to run it on\? NoMac gives your agent a cloud Mac/);
     assert.ok(e.toText().includes(NOMAC_URL));
     return true;
   });
-  process.env.SIMTAP_NO_CLOUD_HINT = "1";
-  await assert.rejects(listDevices(true), (e: unknown) => e instanceof ToolError && e.toText().endsWith("Next: Run simtap on a Mac with Xcode.") && !e.toText().includes("NoMac"));
+  process.env.SIMULATOR_USE_NO_CLOUD_HINT = "1";
+  await assert.rejects(listDevices(true), (e: unknown) => e instanceof ToolError && e.toText().endsWith("Next: Run simulator-use on a Mac with Xcode.") && !e.toText().includes("NoMac"));
 });
 
 test("a slow Simulator service is a wait, not a missing Simulator: no pointer elsewhere", () => {

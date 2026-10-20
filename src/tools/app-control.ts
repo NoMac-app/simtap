@@ -61,7 +61,7 @@ export const appControl: Tool = {
     const action = args.action as string;
     const device = pickDevice(await listDevices(), args.device as string | undefined, heldDevice());
     const label = `${device.name} (${device.runtime})`;
-    // Actions without a value take the app as their one word: `simtap app launch dev.example.app`.
+    // Actions without a value take the app as their one word: `simulator-use app launch dev.example.app`.
     const takesValue = Boolean(VALUE[action]) || action === "reset_permissions";
     const value = takesValue ? (args.value as string | undefined) : undefined;
     const app = (args.app as string | undefined) ?? (takesValue ? undefined : (args.value as string | undefined));

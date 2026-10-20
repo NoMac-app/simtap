@@ -7,6 +7,7 @@ import { build, derivedDataFor, formatIssue, place, projectFor } from "../engine
 import { locate, readTestReport } from "../engine/xcresult.ts";
 import { runDevice } from "./app-run.ts";
 import type { Tool } from "./types.ts";
+import { setting } from "../settings.ts";
 
 const MAX_FAILURES = 20;
 
@@ -34,7 +35,7 @@ export const testsRun: Tool = {
       const { project, scheme, note } = await projectFor(args.path as string | undefined, args.scheme as string | undefined);
       job.title = `Test ${scheme}`;
       const busy = await claimProject(project.path, currentJob(job.id)!);
-      if (typeof busy === "number") return { text: `Another simtap call (process ${busy}) is building ${project.name}; two builds of one project would clash.\nNext: run it again once that one has finished.`, isError: true };
+      if (typeof busy === "number") return { text: `Another simulator-use call (process ${busy}) is building ${project.name}; two builds of one project would clash.\nNext: run it again once that one has finished.`, isError: true };
       if (busy) return { text: `${busy.title} is already running for ${project.name}; two builds of one project would clash.\nNext: job_status {job_id: "${busy.id}"} to follow it, or job_cancel it first.`, isError: true };
       progress.step("choosing the Simulator");
       const device = await runDevice(args.device as string | undefined);
@@ -56,7 +57,7 @@ export const testsRun: Tool = {
       progress.setLog(result.log);
       const seconds = (result.ms / 1000).toFixed(1);
       const report = await readTestReport(bundle).catch((error: Error) => {
-        if (process.env.SIMTAP_DEBUG) process.stderr.write(`simtap: reading ${bundle}: ${error.message}\n`);
+        if (setting("DEBUG")) process.stderr.write(`simulator-use: reading ${bundle}: ${error.message}\n`);
         return undefined;
       });
       if (!report && result.ok) return { text: `The tests of ${scheme} ran (xcodebuild succeeded in ${seconds} s), but their result bundle couldn't be read: ${bundle}. Full log: ${result.log}`, isError: true };

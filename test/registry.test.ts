@@ -36,7 +36,7 @@ test("the CLI offers every tool and every argument the MCP server does", () => {
     assert.ok(help().includes(`  ${tool.command} `), `help lists ${tool.command}`);
     for (const [key, prop] of Object.entries(tool.inputSchema.properties)) {
       if (prop.type === "array") {
-        // A list argument takes the command's words: simtap act "tap #a" "tap #b".
+        // A list argument takes the command's words: simulator-use act "tap #a" "tap #b".
         assert.ok(usage(tool).includes(`<${key}...>`), `usage of ${tool.command} shows <${key}...>`);
         assert.deepEqual(parseArgs(tool, ["tap #a", "tap #b"]), { [key]: ["tap #a", "tap #b"] });
         continue;
@@ -56,7 +56,7 @@ test("the CLI offers every tool and every argument the MCP server does", () => {
 test("MCP 2024-11-05 to 2025-11-25: initialize answers the client's version, or the newest it knows", async () => {
   const asked = (await request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } }))?.result as Record<string, unknown>;
   assert.equal(asked.protocolVersion, "2025-06-18");
-  assert.deepEqual(asked.serverInfo, { name: "simtap", version: asked.serverInfo && (asked.serverInfo as { version: string }).version });
+  assert.deepEqual(asked.serverInfo, { name: "simulator-use", version: asked.serverInfo && (asked.serverInfo as { version: string }).version });
   assert.equal(asked.instructions, INSTRUCTIONS);
   const unknown = (await request("initialize", { protocolVersion: "2031-01-01" }))?.result as Record<string, unknown>;
   assert.equal(unknown.protocolVersion, "2025-11-25");
@@ -112,6 +112,6 @@ test("the skill stays within 2 KB and names the main commands", async () => {
   const { readFileSync } = await import("node:fs");
   const skill = readFileSync(new URL("../skill/SKILL.md", import.meta.url), "utf8");
   assert.ok(Buffer.byteLength(skill) <= 2048, `${Buffer.byteLength(skill)} bytes`);
-  for (const command of ["run", "look", "act", "logs", "test", "use", "app", "record"]) assert.match(skill, new RegExp(`simtap ${command}\\b`));
+  for (const command of ["run", "look", "act", "logs", "test", "use", "app", "record"]) assert.match(skill, new RegExp(`simulator-use ${command}\\b`));
   assert.doesNotMatch(skill, /—/, "no em dashes");
 });

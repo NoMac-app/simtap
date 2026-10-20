@@ -83,7 +83,7 @@ export async function launch(udid: string, bundleId: string): Promise<void> {
   }
 }
 
-/** The app's own system log lines, streamed to a file while simtap watches it. */
+/** The app's own system log lines, streamed to a file while simulator-use watches it. */
 export async function streamFile(udid: string, bundleId: string): Promise<string> {
   return join(await deviceDir(udid), `${bundleId}.syslog.log`);
 }

@@ -54,7 +54,7 @@ test("finding the project: workspace first, then project, then ios/, and a clear
 });
 
 test("an XcodeGen project is regenerated before each build; when that fails, the existing project is built and the call says so", async () => {
-  const root = mkdtempSync(join(tmpdir(), "simtap-xcodegen-"));
+  const root = mkdtempSync(join(tmpdir(), "simulator-use-xcodegen-"));
   // A spec xcodegen can't read (or no xcodegen at all, as on Linux): the regeneration fails either way.
   const app = join(root, "app");
   mkdirSync(join(app, "App.xcodeproj"), { recursive: true });

@@ -1,6 +1,8 @@
-# simtap
+# simulator-use
 
-Give your agent a phone. simtap lets Claude Code, Codex, Cursor and any other MCP client read and drive the iOS Simulator on your Mac, with a small set of tools and a compact view of the screen.
+Give your agent a phone. simulator-use lets Claude Code, Codex, Cursor and any other MCP client read and drive the iOS Simulator on your Mac, with a small set of tools and a compact view of the screen.
+
+Formerly simtap (until 0.7): the `simtap` command and the `SIMTAP_*` settings still work.
 
 It builds, runs and tests Xcode projects, reads and uses the screen of any app (SwiftUI, UIKit, React Native), answers iOS's permission prompts, reads the app's logs and crashes, and records video. Tested on Xcode 26.5 and 27 with iOS 26.5 and 27, on iPhone and iPad.
 
@@ -61,17 +63,17 @@ Every step is checked, so nothing succeeds silently:
 
 | Tool | CLI | Does |
 |---|---|---|
-| `app_run` | `simtap run` | Builds the Xcode project here, installs and launches it, answers with the first screen; errors as `file:line` |
-| `devices` | `simtap devices` | Lists the Simulators on this Mac with their runtime, UDID and state |
-| `device_use` | `simtap use "iPhone 17 Pro"` | Chooses the Simulator the other tools use, booting it (one boot at a time); dark mode, a clean status bar |
-| `app_control` | `simtap app launch dev.example.app` | `install`, `launch` (answers with the first screen), `terminate`, `uninstall`, `open_url`; `grant`, `revoke` and `reset_permissions`; `location`; `push` |
-| `ui_look` | `simtap look` | Reads the screen; `find` keeps matching lines, `screenshot` adds a picture, `full` saves the whole tree |
-| `ui_act` | `simtap act "tap #signIn" ...` | Does steps in order and answers with what changed |
-| `app_logs` | `simtap logs` | The app's print output and its own system log lines; `grep`, `wait_for`, `crashes` |
-| `tests_run` | `simtap test` | Runs the unit and UI tests; counts, and each failure as `file:line`; "0 tests ran" is an error |
-| `screen_record` | `simtap record start` | Starts or stops a video of the screen; stop answers with the MP4 |
-| `job_status` | `simtap job` | Waits up to 40 s for a long build and answers with its result, or its progress |
-| `job_cancel` | `simtap cancel` | Stops a job |
+| `app_run` | `simulator-use run` | Builds the Xcode project here, installs and launches it, answers with the first screen; errors as `file:line` |
+| `devices` | `simulator-use devices` | Lists the Simulators on this Mac with their runtime, UDID and state |
+| `device_use` | `simulator-use use "iPhone 17 Pro"` | Chooses the Simulator the other tools use, booting it (one boot at a time); dark mode, a clean status bar |
+| `app_control` | `simulator-use app launch dev.example.app` | `install`, `launch` (answers with the first screen), `terminate`, `uninstall`, `open_url`; `grant`, `revoke` and `reset_permissions`; `location`; `push` |
+| `ui_look` | `simulator-use look` | Reads the screen; `find` keeps matching lines, `screenshot` adds a picture, `full` saves the whole tree |
+| `ui_act` | `simulator-use act "tap #signIn" ...` | Does steps in order and answers with what changed |
+| `app_logs` | `simulator-use logs` | The app's print output and its own system log lines; `grep`, `wait_for`, `crashes` |
+| `tests_run` | `simulator-use test` | Runs the unit and UI tests; counts, and each failure as `file:line`; "0 tests ran" is an error |
+| `screen_record` | `simulator-use record start` | Starts or stops a video of the screen; stop answers with the MP4 |
+| `job_status` | `simulator-use job` | Waits up to 40 s for a long build and answers with its result, or its progress |
+| `job_cancel` | `simulator-use cancel` | Stops a job |
 
 The MCP server and the CLI are built from one list, so they always match. The tool list and instructions stay under 4,000 tokens; a test enforces it.
 
@@ -88,10 +90,10 @@ textfield "Email" #email @201,194
 ```
 
 - A failed build answers with the errors only, as `Sources/App.swift:49:37: error: ...`, and the path to the full log.
-- Each folder (each git worktree) builds into its own DerivedData, so rebuilds are incremental and worktrees never share products. `SIMTAP_CACHE_DIR` puts it on a disk you keep, so the next machine's build is incremental too.
+- Each folder (each git worktree) builds into its own DerivedData, so rebuilds are incremental and worktrees never share products. `SIMULATOR_USE_CACHE_DIR` puts it on a disk you keep, so the next machine's build is incremental too.
 - An XcodeGen project is regenerated from `project.yml` before each build (skipped when nothing changed), so new files are always in it.
 - The next call in the same folder needs no arguments.
-- An MCP call answers within 40 s; a longer build answers with a job, and `job_status` waits for it. From the CLI, `simtap run` simply waits.
+- An MCP call answers within 40 s; a longer build answers with a job, and `job_status` waits for it. From the CLI, `simulator-use run` simply waits.
 - Two builds of one project never run at once, also from two processes: the second says which process is building it.
 - Expo, React Native, Flutter and Capacitor builds are not done yet; build them with their own tools, then `app_control install`.
 
@@ -121,19 +123,19 @@ DemoTests/rejectsAnEmailWithoutAt(): Tests/SignInTests.swift:18: Expectation fai
 ## Several agents, one Mac
 
 - Each agent runs its own MCP server and holds its own Simulator through `device_use`.
-- Boots never overlap, across every simtap process on the Mac: two Simulators booting at once on an 8 GB Mac pushed it into swap for minutes.
-- `SIMTAP_MAX_BOOTED` caps how many run at once; asking for another shuts down the others first.
-- Steps on one Simulator run one at a time, across every simtap process on the Mac, so two agents' or two commands' taps never interleave.
+- Boots never overlap, across every simulator-use process on the Mac: two Simulators booting at once on an 8 GB Mac pushed it into swap for minutes.
+- `SIMULATOR_USE_MAX_BOOTED` caps how many run at once; asking for another shuts down the others first.
+- Steps on one Simulator run one at a time, across every simulator-use process on the Mac, so two agents' or two commands' taps never interleave.
 
 ## One command at a time
 
-Agents that run simtap through a shell, a command per call, get the same tools:
-- `simtap use` is remembered: the next command uses that Simulator, also with several booted. `SIMTAP_STATE_DIR` moves simtap's files (default: simtap in the temporary folder).
+Agents that run simulator-use through a shell, a command per call, get the same tools:
+- `simulator-use use` is remembered: the next command uses that Simulator, also with several booted. `SIMULATOR_USE_STATE_DIR` moves simulator-use's files (default: simulator-use in the temporary folder).
 - Each command waits for its own work, so there is no job to follow.
-- `simtap call <tool> '<json>'` calls a tool by its MCP name and prints one line of MCP content, `{"content":[...],"isError":true}` on failure, images as base64:
+- `simulator-use call <tool> '<json>'` calls a tool by its MCP name and prints one line of MCP content, `{"content":[...],"isError":true}` on failure, images as base64:
 
 ```
-$ simtap call ui_look '{"find":"Sign In"}'
+$ simulator-use call ui_look '{"find":"Sign In"}'
 {"content":[{"type":"text","text":"Demo · Sign In · iPhone 17 Pro (iOS 26.5)\nbutton \"Sign In\" #signIn @201,350"}]}
 ```
 
@@ -151,10 +153,10 @@ Needs macOS with Xcode and a Simulator runtime, and Node 20 or newer.
 
 ```sh
 # Claude Code
-claude mcp add simtap -- npx -y simtap mcp
+claude mcp add simulator-use -- npx -y simulator-use mcp
 
 # Codex
-codex mcp add simtap -- npx -y simtap mcp
+codex mcp add simulator-use -- npx -y simulator-use mcp
 ```
 
 Cursor, Windsurf, VS Code and other clients that take a JSON config:
@@ -162,24 +164,24 @@ Cursor, Windsurf, VS Code and other clients that take a JSON config:
 ```json
 {
   "mcpServers": {
-    "simtap": { "command": "npx", "args": ["-y", "simtap", "mcp"] }
+    "simulator-use": { "command": "npx", "args": ["-y", "simulator-use", "mcp"] }
   }
 }
 ```
 
-Any other client: run `npx -y simtap mcp` as a stdio server. It speaks MCP 2024-11-05 through 2026-07-28.
+Any other client: run `npx -y simulator-use mcp` as a stdio server. It speaks MCP 2024-11-05 through 2026-07-28.
 
 Agents that work from a shell can use the CLI instead; `skill/SKILL.md` in the package teaches it in under 2 KB.
 
-From a shell: `npx simtap look`.
+From a shell: `npx simulator-use look`.
 
 ## Privacy
 
-simtap sends nothing anywhere. There is no telemetry and no network access at runtime: it runs `xcrun simctl`, the bundled AXe binary and `sips`, all on your Mac.
+simulator-use sends nothing anywhere. There is no telemetry and no network access at runtime: it runs `xcrun simctl`, the bundled AXe binary and `sips`, all on your Mac.
 
 ## How it works
 
-simtap reads the Simulator through [AXe](https://github.com/cameroncooke/AXe) (MIT), bundled at a pinned version with its checksum checked at packaging, and through `xcrun simctl`. There is no test runner to build, so the first call is as fast as the rest.
+simulator-use reads the Simulator through [AXe](https://github.com/cameroncooke/AXe) (MIT), bundled at a pinned version with its checksum checked at packaging, and through `xcrun simctl`. There is no test runner to build, so the first call is as fast as the rest.
 
 ## Develop
 
@@ -188,20 +190,20 @@ npm install
 npm run axe        # fetch the pinned AXe into vendor/axe
 npm test           # node --test, no build needed
 npm run build      # dist/ for the npm package
-node bin/simtap.js look
+node bin/simulator-use.js look
 ```
 
 `examples/swiftui-demo` is the sample app the tests' screens come from. `scripts/golden.sh` builds it, runs it on a Simulator and checks 19 golden tasks: build and launch in one call, sign in, toggle, open an item, back and scroll, the app's logs, a crash, a build error and a failing test as `file:line`, a video, and a wrong password that must fail loudly.
 
 `examples/edge-lab` is an app with every awkward screen: segments, steppers, sliders, menus, alerts, sheets, full-screen covers, permission prompts, text in any language, autocorrect, late content, toasts, swipe-to-delete, long press, a web view, UIKit and a deep link. `scripts/lab.sh` builds it and runs 26 checks on it.
 
-`SIMTAP_DEBUG=1` prints every step and every program run with its time.
+`SIMULATOR_USE_DEBUG=1` prints every step and every program run with its time.
 
 ## Made at NoMac
 
-simtap is built at [NoMac](https://nomac.app), where AI agents rent real Macs in the cloud to build, run and test Apple apps. It comes from thousands of agent runs on those Macs: where agents get stuck, what they misread on screen, and what they need to be told to keep going.
+simulator-use is built at [NoMac](https://nomac.app), where AI agents rent real Macs in the cloud to build, run and test Apple apps. It comes from thousands of agent runs on those Macs: where agents get stuck, what they misread on screen, and what they need to be told to keep going.
 
-When simtap can't run where it is (no Mac, no Xcode, no Simulator runtime), its error names NoMac as a place to get one. It never shows when simtap works, and `SIMTAP_NO_CLOUD_HINT=1` hides it.
+When simulator-use can't run where it is (no Mac, no Xcode, no Simulator runtime), its error names NoMac as a place to get one. It never shows when simulator-use works, and `SIMULATOR_USE_NO_CLOUD_HINT=1` hides it.
 
 ## License
 

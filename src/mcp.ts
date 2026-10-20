@@ -12,7 +12,7 @@ import { callTool, INSTRUCTIONS, toContent, TOOLS, VERSION } from "./registry.ts
 const STATELESS = "2026-07-28";
 const HANDSHAKE_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 export const SUPPORTED_VERSIONS = [STATELESS, ...HANDSHAKE_VERSIONS];
-const SERVER_INFO = { name: "simtap", version: VERSION };
+const SERVER_INFO = { name: "simulator-use", version: VERSION };
 const CAPABILITIES = { tools: { listChanged: false } };
 
 type Request = { jsonrpc?: string; id?: string | number | null; method?: string; params?: Record<string, unknown> };

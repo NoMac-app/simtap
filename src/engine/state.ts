@@ -2,19 +2,20 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setting } from "../settings.ts";
 
 /**
  * What a call can leave for the next one.
  * - The device an MCP server's agent holds lives in its memory: each agent runs its own server, so two agents
  *   never share it. A CLI call is its own process, so the CLI keeps the device in a file (persistHeld), and
- *   `simtap use` carries over to the next command.
+ *   `simulator-use use` carries over to the next command.
  * - The app last launched on a device is a small file next to its log files, so the CLI and MCP see the same.
  */
 let held: string | undefined;
 let persist = false;
 
-/** Where simtap keeps its files: SIMTAP_STATE_DIR, else simtap in the user's temporary folder. */
-export const stateDir = () => process.env.SIMTAP_STATE_DIR || join(tmpdir(), "simtap");
+/** Where simulator-use keeps its files: SIMULATOR_USE_STATE_DIR, else simulator-use in the user's temporary folder. */
+export const stateDir = () => setting("STATE_DIR") || join(tmpdir(), "simulator-use");
 const heldFile = () => join(stateDir(), "held-device.json");
 
 /** The CLI keeps the held device between its calls. */
@@ -44,7 +45,7 @@ export const heldDevice = () => {
   return held;
 };
 
-/** Where simtap keeps a device's app output: the print() lines of apps it launched. */
+/** Where simulator-use keeps a device's app output: the print() lines of apps it launched. */
 export async function deviceDir(udid: string): Promise<string> {
   const dir = join(stateDir(), udid);
   await mkdir(dir, { recursive: true });

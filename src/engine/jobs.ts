@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import type { ToolResult } from "../tools/types.ts";
 import { tryLock } from "./lock.ts";
+import { setting } from "../settings.ts";
 
 /**
  * Long work (a build) answers within 40 s with a job, and keeps going in this MCP server's process.
@@ -94,7 +95,7 @@ export const elapsed = (job: Job) => {
 };
 
 /** A call answers within this (40 s); longer work goes on as a job. */
-export const ANSWER_WITHIN_MS = (Number(process.env.SIMTAP_JOB_AFTER_S) || 40) * 1000;
+export const ANSWER_WITHIN_MS = (Number(setting("JOB_AFTER_S")) || 40) * 1000;
 
 /** The result if it comes within 40 s, else the job to follow; the CLI just waits. */
 export async function answer(job: Job, waitForJobs: boolean): Promise<ToolResult> {
@@ -109,7 +110,7 @@ const projects = new Map<string, Job>();
 
 /**
  * Claims a project for a job, or names what already builds it: a job of this process, or the pid of another
- * simtap process (each CLI call is its own). Released when the job ends.
+ * simulator-use process (each CLI call is its own). Released when the job ends.
  */
 export async function claimProject(projectPath: string, job: Job): Promise<Job | number | undefined> {
   const holder = projects.get(projectPath);

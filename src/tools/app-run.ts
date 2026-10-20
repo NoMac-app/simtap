@@ -6,6 +6,7 @@ import { build, builtApp, formatIssue, projectFor, remember } from "../engine/xc
 import { ToolError } from "../errors.ts";
 import { launchAndLook } from "./launch-app.ts";
 import type { Tool } from "./types.ts";
+import { setting } from "../settings.ts";
 
 const MAX_ERRORS = 15;
 
@@ -20,7 +21,7 @@ export async function runDevice(wanted?: string): Promise<Device> {
   if (wanted && !named) throw new ToolError(`No Simulator named "${wanted}".`, "Call devices to see the names and UDIDs on this Mac.");
   const target = named ?? (devices.some((d) => d.booted) || heldDevice() ? undefined : devices.find((d) => d.name.startsWith("iPhone")));
   if (target && !target.booted) {
-    const boot = await bootDevice(target, Number(process.env.SIMTAP_MAX_BOOTED) || Infinity);
+    const boot = await bootDevice(target, Number(setting("MAX_BOOTED")) || Infinity);
     if (!boot.ready) throw new ToolError(`${target.name} is still booting.`, "Call app_run again in 30 s.");
     return target;
   }
@@ -53,7 +54,7 @@ export const appRun: Tool = {
       const { project, scheme, dir, note } = await projectFor(args.path as string | undefined, args.scheme as string | undefined);
       job.title = `Build and run ${scheme}`;
       const busy = await claimProject(project.path, currentJob(job.id)!);
-      if (typeof busy === "number") return { text: `Another simtap call (process ${busy}) is building ${project.name}; two builds of one project would clash.\nNext: run it again once that one has finished.`, isError: true };
+      if (typeof busy === "number") return { text: `Another simulator-use call (process ${busy}) is building ${project.name}; two builds of one project would clash.\nNext: run it again once that one has finished.`, isError: true };
       if (busy) return { text: `${busy.title} is already running for ${project.name}; two builds of one project would clash.\nNext: job_status {job_id: "${busy.id}"} to follow it, or job_cancel it first.`, isError: true };
       const configuration = (args.configuration as string | undefined) ?? "Debug";
       progress.step("choosing the Simulator");

@@ -7,7 +7,7 @@ import UIKit
 import UserNotifications
 import WebKit
 
-/// Everything an agent meets in real apps, one screen each: the simtap battle test.
+/// Everything an agent meets in real apps, one screen each: the simulator-use battle test.
 @main
 struct EdgeLabApp: App {
     @State private var deepLink = "none"

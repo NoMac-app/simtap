@@ -54,7 +54,7 @@ const CACHE_MS = 5_000;
 let cached: { at: number; devices: Device[] } | undefined;
 
 export async function listDevices(fresh = false): Promise<Device[]> {
-  if (process.platform !== "darwin") throw new ToolError(NO_SIMULATOR, withCloudHint("Run simtap on a Mac with Xcode."));
+  if (process.platform !== "darwin") throw new ToolError(NO_SIMULATOR, withCloudHint("Run simulator-use on a Mac with Xcode."));
   if (!fresh && cached && Date.now() - cached.at < CACHE_MS) return cached.devices;
   try {
     const { stdout } = await run("xcrun", ["simctl", "list", "devices", "--json"], { timeoutMs: 30_000 });
@@ -122,7 +122,7 @@ const BOOT_BUDGET_MS = 40_000;
 const LOCK_WAIT_MS = 20_000;
 
 /**
- * One boot at a time on this Mac, across every simtap process (each agent runs its own), held in a lock
+ * One boot at a time on this Mac, across every simulator-use process (each agent runs its own), held in a lock
  * (lock.ts) that a dead owner's successor takes over.
  */
 const withBootLock = <T>(work: () => Promise<T>): Promise<T> =>
@@ -133,14 +133,14 @@ export type Boot = { ms: number; ready: boolean; waitedMs: number; shutDown: str
 /**
  * Boots a device and waits until it is ready, within the time a call may take. Two Simulators booting at once
  * on an 8 GB Mac pushed it into swap for minutes (measured October 18), so boots never overlap. With a limit on
- * booted devices (SIMTAP_MAX_BOOTED), others are shut down first, inside the lock so two calls can't both
+ * booted devices (SIMULATOR_USE_MAX_BOOTED), others are shut down first, inside the lock so two calls can't both
  * see room.
  */
 export async function bootDevice(device: Device, maxBooted = Infinity): Promise<Boot> {
   const asked = Date.now();
   return withBootLock(async () => {
     const started = Date.now();
-    // A boot started outside simtap (Xcode, simctl) is waited out too.
+    // A boot started outside simulator-use (Xcode, simctl) is waited out too.
     while (Date.now() - asked < LOCK_WAIT_MS && (await listDevices(true)).some((d) => d.state === "Booting" && d.udid !== device.udid)) {
       await new Promise((r) => setTimeout(r, 1_000));
     }
