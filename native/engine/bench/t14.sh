@@ -14,7 +14,7 @@ t0=$(now); mkdir -p /Library/NoMacSim/golden; rm -rf "$GOLDEN"; cp -c -R "$SRC" 
 echo "golden copied to a root-owned folder by APFS clone in $(echo "$t1-$t0" | bc) s ($(du -sh "$GOLDEN" | cut -f1) logical)"
 for round in 1 2; do
   t0=$(now)
-  diskutil apfs addVolume "$container" APFS "$VOL" -quota 20g -mountpoint "/Volumes/$VOL" >/dev/null || { echo "addVolume failed"; exit 1; }
+  diskutil apfs addVolume "$container" APFS "$VOL" -quota 20g >/dev/null || { echo "addVolume failed"; exit 1; }
   chown "$USER_NAME" "/Volumes/$VOL"; t1=$(now)
   SET=/Volumes/$VOL/devices; as mkdir -p "$SET"
   NEW=$(uuidgen); cp -c -R "$GOLDEN" "$SET/$NEW"; chown -R "$USER_NAME" "$SET/$NEW"

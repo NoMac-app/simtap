@@ -152,7 +152,7 @@ async function act(udid: string, deviceLabel: string, lines: string[], called: n
     return snap;
   };
   const settled = async (n: number) => {
-    const s = await settle(udid);
+    const s = await settle(udid, snap.app);
     if (!s.settled) notes.push(`step ${n}: the screen was still changing after 4 s`);
     snap = s.snap;
     stale = false;

@@ -42,7 +42,18 @@ func cpuMs() -> Int {
 }
 /** The last tree any read returned, to tell a screen that moved but did not change yet (an app still opening). */
 var lastTreeSignature = 0
-func signature(_ tree: Any) -> Int { ((try? JSONSerialization.data(withJSONObject: tree, options: [.sortedKeys])) ?? Data()).hashValue }
+var lastFrontPid = -1
+/** What the screen shows, not how it is drawn: kinds, labels and ids (a pressed icon or a moving frame is the same screen). */
+func signature(_ tree: Any) -> Int {
+  var hasher = Hasher()
+  func walk(_ node: Any) {
+    if let list = node as? [Any] { list.forEach(walk); return }
+    guard let n = node as? [String: Any] else { return }
+    hasher.combine(n["type"] as? String); hasher.combine(n["AXLabel"] as? String); hasher.combine(n["AXUniqueId"] as? String)
+    (n["children"] as? [Any])?.forEach(walk)
+  }
+  walk(tree); return hasher.finalize()
+}
 func isEmptyApp(_ tree: Any) -> Bool {
   let roots = (tree as? [[String: Any]]) ?? []
   return roots.isEmpty || !roots.contains { (($0["children"] as? [Any])?.count ?? 0) > 0 }
@@ -204,14 +215,37 @@ func installPersistentBootstrap() {
   }
   method_setImplementation(method, imp_implementationWithBlock(block))
 }
+func nodeCount(_ tree: Any) -> Int {
+  if let list = tree as? [Any] { return list.reduce(0) { $0 + nodeCount($1) } }
+  guard let n = tree as? [String: Any] else { return 0 }
+  return 1 + ((n["children"] as? [Any]).map(nodeCount) ?? 0)
+}
 @MainActor
 func readFrontmost(_ simulator: FBSimulator, keys: Set<FBAXKeys>, nested: Bool = true) async throws -> Any {
+  var reloaded = false
   for attempt in 0..<2 {
     do {
       let element = try await simulator.accessibilityElementForFrontmostApplication()
-      defer { element.close() }
-      let tree = withDefaults(try element.serialize(with: FBAccessibilityRequestOptions(nestedFormat: nested, keys: keys)).elements)
-      if attempt == 0 && isEmptyApp(tree) { forceBootstrap = true; continue }
+      var tree = withDefaults(try element.serialize(with: FBAccessibilityRequestOptions(nestedFormat: nested, keys: keys)).elements)
+      element.close()
+      if attempt == 0 && isEmptyApp(tree) { forceBootstrap = true; reloaded = true; continue }
+      // A different app in front (one opened or closed) fills in its elements over a moment: read again until two
+      // reads agree, up to 2 s. Within one app a single read is enough.
+      let pid = ((tree as? [[String: Any]])?.first?["pid"] as? Int) ?? -1
+      if reloaded || pid != lastFrontPid {
+        let start = Date()
+        while Date().timeIntervalSince(start) < 2 {
+          try? await Task.sleep(nanoseconds: 250_000_000)
+          let again = try await simulator.accessibilityElementForFrontmostApplication()
+          let next = withDefaults(try again.serialize(with: FBAccessibilityRequestOptions(nestedFormat: nested, keys: keys)).elements)
+          again.close()
+          let same = signature(next) == signature(tree)
+          tree = next
+          // Two equal reads of a nearly empty app are its shell before the content: not settled yet.
+          if same && !isEmptyApp(tree) && nodeCount(tree) >= 12 { break }
+        }
+      }
+      lastFrontPid = ((tree as? [[String: Any]])?.first?["pid"] as? Int) ?? -1
       lastTreeSignature = signature(tree)
       return tree
     } catch {
