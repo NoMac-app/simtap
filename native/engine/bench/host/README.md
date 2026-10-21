@@ -14,3 +14,9 @@ end, the account volume, builds, installs); each `*-body.sh` is appended to it (
 - `longrun.py`: one engine on one phone for an hour; `fswatch.sh`: file events for a pool user.
 - `read.py`, `ts.py`, `ips.py`: small readers for the engine's answers, timestamps and crash reports.
 - `../live/`: the live view through a relay to a browser (`relay.mjs`, `page.html`, `measure.mjs`).
+- `smalls-body.sh`: status bar, appearance, location, permissions, push, photos, clipboard, locale, recording.
+- `safari-body.sh`, `golden-per-user-body.sh`: Safari's crash in goldens made by another user, and the per-user golden.
+- `clone-body.sh`: phones cloned from a root-owned golden on a permanent per-user volume.
+- `webread-body.sh` with `webread.py`: reading a web page (whole-screen and point reads, AXe for comparison).
+- `pboard-body.sh`, `pbset-body.sh` with `paste.py`, `su-paste-body.sh`: the clipboard without a screen session.
+- `ipad-body.sh` with `ipad.py`; `manifest.py`: a sync manifest's cost.
