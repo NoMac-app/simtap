@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { ToolError } from "../errors.ts";
 import type { AxNode, Frame } from "../look/snapshot.ts";
 import { run } from "./exec.ts";
+import { engineCall, engineGesture, engineSteps } from "./native.ts";
 import { setting } from "../settings.ts";
 
 /**
@@ -30,6 +31,14 @@ export class AccessibilityStarting extends ToolError {}
 const STARTING = /remote automation session|No translation object returned/i;
 
 export async function describeUi(udid: string): Promise<AxNode[]> {
+  const answer = await engineCall(udid, { op: "describe" });
+  if (answer?.ok) {
+    const tree = answer.tree as AxNode | AxNode[];
+    return Array.isArray(tree) ? tree : [tree];
+  }
+  if (answer && STARTING.test(answer.error ?? "")) {
+    throw new AccessibilityStarting("The Simulator's accessibility service is still starting; after a first boot this can take a minute or two.", "Call again in 30 seconds.");
+  }
   try {
     const { stdout } = await run(axePath(), ["describe-ui", "--udid", udid], { timeoutMs: 30_000 });
     const parsed = JSON.parse(stdout) as AxNode | AxNode[];
@@ -45,6 +54,9 @@ export async function describeUi(udid: string): Promise<AxNode[]> {
 
 /** A JPEG of the screen sized to points, so a point in the picture is a point to tap (402x874 is about 470 image tokens). */
 export async function screenshot(udid: string, points: Frame): Promise<Buffer> {
+  const sized = points.width > 0 && points.height > 0 ? { width: Math.round(points.width), height: Math.round(points.height) } : {};
+  const answer = await engineCall(udid, { op: "screenshot", ...sized, quality: 0.7, inline: true });
+  if (answer?.ok && typeof answer.jpeg_base64 === "string") return Buffer.from(answer.jpeg_base64, "base64");
   const dir = await mkdtemp(join(tmpdir(), "simulator-use-"));
   try {
     const png = join(dir, "screen.png");
@@ -64,6 +76,11 @@ const axe = (udid: string, args: string[], timeoutMs = 30_000) => run(axePath(),
 
 /** One AXe process for several input steps (tap, type, key, key-combo, swipe, sleep): about 0.2 s cheaper per step. */
 export async function batch(udid: string, steps: string[]): Promise<void> {
+  const native = engineSteps(steps);
+  if (native) {
+    const answer = await engineCall(udid, { op: "steps", steps: native }, 60_000);
+    if (answer?.ok) return;
+  }
   try {
     await axe(udid, ["batch", "--ax-cache", "none", "--type-submission", "composite", ...steps.flatMap((s) => ["--step", s])], 60_000);
   } catch (error) {
@@ -73,6 +90,11 @@ export async function batch(udid: string, steps: string[]): Promise<void> {
 
 /** A drag or swipe on its own: AXe's batch takes swipe but not drag. */
 export async function gesture(udid: string, args: string[]): Promise<void> {
+  const native = engineGesture(args);
+  if (native) {
+    const answer = await engineCall(udid, native, 30_000);
+    if (answer?.ok) return;
+  }
   try {
     await axe(udid, args, 30_000);
   } catch (error) {
@@ -82,6 +104,11 @@ export async function gesture(udid: string, args: string[]): Promise<void> {
 
 /** The single element at a point, for reading back a field right after typing (about 0.15 s). */
 export async function elementAt(udid: string, x: number, y: number): Promise<AxNode | undefined> {
+  const answer = await engineCall(udid, { op: "point", x: Math.round(x), y: Math.round(y) }, 3_000);
+  if (answer?.ok) {
+    const element = answer.element as AxNode | AxNode[] | undefined;
+    return Array.isArray(element) ? element[0] : element;
+  }
   try {
     // Normally 0.15 s; on a fresh Xcode 27 VM some hung for 8 to 11 s, so a slow one is abandoned for a full read.
     const { stdout } = await axe(udid, ["describe-ui", "--point", `${Math.round(x)},${Math.round(y)}`], 3_000);
@@ -98,6 +125,8 @@ export function typeStep(text: string): string {
 }
 
 export async function pressButton(udid: string, button: "home" | "lock"): Promise<void> {
+  const answer = await engineCall(udid, { op: button, wait: false });
+  if (answer?.ok) return;
   await axe(udid, ["button", button]);
 }
 

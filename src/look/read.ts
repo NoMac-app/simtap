@@ -1,6 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { AccessibilityStarting, describeUi } from "../engine/axe.ts";
+import { engineCall } from "../engine/native.ts";
 import { type AxNode, render, type Snapshot, snapshot } from "./snapshot.ts";
 
 /** Right after a launch the app's accessibility tree is empty for a moment (seen on Xcode 27). */
@@ -43,6 +44,10 @@ export async function readScreen(udid: string, waitUntilReady = true): Promise<S
  * `settled: false` means it was still moving at the timeout (an animation, a ticker, a spinner).
  */
 export async function settle(udid: string): Promise<{ snap: Snapshot; settled: boolean }> {
+  // With the engine: the screen buffer says when the screen stopped changing (up to 0.8 s for the first change
+  // after an input, then 150 ms without one), and one read follows.
+  const answer = await engineCall(udid, { op: "settle", first_change_ms: 800, quiet_ms: 150, timeout_ms: SETTLE_TIMEOUT_MS }, SETTLE_TIMEOUT_MS + 5_000);
+  if (answer?.ok) return { snap: (await readScreen(udid, false)).snap, settled: answer.settled !== false };
   const deadline = Date.now() + SETTLE_TIMEOUT_MS;
   await sleep(SETTLE_START_MS);
   let last = (await readScreen(udid, false)).snap;

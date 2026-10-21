@@ -40,6 +40,13 @@ func cpuMs() -> Int {
   let now = Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) * 1000 + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1000
   defer { lastCPU = now }; return Int(now - lastCPU)
 }
+/** The last tree any read returned, to tell a screen that moved but did not change yet (an app still opening). */
+var lastTreeSignature = 0
+func signature(_ tree: Any) -> Int { ((try? JSONSerialization.data(withJSONObject: tree, options: [.sortedKeys])) ?? Data()).hashValue }
+func isEmptyApp(_ tree: Any) -> Bool {
+  let roots = (tree as? [[String: Any]]) ?? []
+  return roots.isEmpty || !roots.contains { (($0["children"] as? [Any])?.count ?? 0) > 0 }
+}
 func withDefaults(_ any: Any) -> Any {
   if let list = any as? [Any] { return list.map(withDefaults) }
   guard var element = any as? [String: Any] else { return any }
@@ -113,29 +120,113 @@ func blocking(_ work: @escaping @Sendable () throws -> Void) async throws {
  phone: repeated sessions pile up in the phone's testmanagerd, slow every read and finally time out.
  This replaces the class method with one that runs the original once and then reports success.
  */
-typealias BootstrapIMP = @convention(c) (AnyClass, Selector, AnyObject, Double, AnyObject?, UnsafeMutablePointer<NSError?>?) -> Bool
-var bootstrapDone = false
+/**
+ iOS 27 Simulators read accessibility only while an XCTest "remote automation session" has loaded it, and an
+ app launched afterwards is unreadable until it is loaded again. FBSimulatorControl opens a session, loads
+ accessibility and closes the session before every request; in a long-lived process new sessions soon time out.
+ The engine instead opens one session per phone, keeps it for its whole life, and reloads accessibility on that
+ same session when the frontmost app reads empty (forceBootstrap). The framework's per-request bootstrap is
+ replaced by this.
+ */
 var bootstrapCount = 0
-func bootstrapAccessibilityOnce() {
+var signalSources: [DispatchSourceSignal] = []
+var forceBootstrap = false
+var automationSession: AnyObject?
+var skipBootstrap = CommandLine.arguments.contains("--no-bootstrap")
+func objcCall(_ target: AnyObject, _ name: String) -> IMP? {
+  let sel = NSSelectorFromString(name)
+  if let cls = target as? AnyClass { return class_getMethodImplementation(object_getClass(cls), sel) }
+  return class_getMethodImplementation(object_getClass(target), sel)
+}
+func openSession(device: AnyObject, timeout: Double) -> (AnyObject?, String?) {
+  guard let providerClass: AnyClass = NSClassFromString("XCUIDeviceRemoteDaemonConnectionProvider"),
+        let sessionClass: AnyClass = NSClassFromString("XCUIDeviceRemoteAutomationSession") else { return (nil, "XCTest automation classes unavailable") }
+  typealias ProviderFn = @convention(c) (AnyClass, Selector, AnyObject) -> Unmanaged<AnyObject>?
+  let provider = unsafeBitCast(objcCall(providerClass, "connectionProviderForSimDevice:"), to: ProviderFn.self)(providerClass, NSSelectorFromString("connectionProviderForSimDevice:"), device)?.takeUnretainedValue()
+  guard let provider else { return (nil, "no daemon connection provider") }
+  let done = DispatchSemaphore(value: 0); var session: AnyObject?; var failure: String?
+  let completion: @convention(block) (AnyObject?, NSError?) -> Void = { s, e in session = s; failure = e?.localizedDescription; done.signal() }
+  typealias RequestFn = @convention(c) (AnyClass, Selector, AnyObject, AnyObject) -> Void
+  unsafeBitCast(objcCall(sessionClass, "requestSessionWithDaemonConnectionProvider:completion:"), to: RequestFn.self)(sessionClass, NSSelectorFromString("requestSessionWithDaemonConnectionProvider:completion:"), provider, completion as AnyObject)
+  if done.wait(timeout: .now() + timeout) == .timedOut { return (nil, "timed out creating the remote automation session") }
+  guard let session else { return (nil, failure ?? "no session") }
+  typealias EnableFn = @convention(c) (AnyObject, Selector, UnsafeMutablePointer<NSError?>?) -> Bool
+  if session.responds(to: NSSelectorFromString("enableAutomationModeWithError:")) {
+    var error: NSError?
+    if !unsafeBitCast(objcCall(session, "enableAutomationModeWithError:"), to: EnableFn.self)(session, NSSelectorFromString("enableAutomationModeWithError:"), &error) { return (nil, "automation mode: \(error?.localizedDescription ?? "refused")") }
+  }
+  return (session, nil)
+}
+/** Ends the automation session so the phone accepts the next client's session (a session left open blocks them). */
+func closeSession() {
+  guard let session = automationSession else { return }
+  automationSession = nil
+  if session.responds(to: NSSelectorFromString("invalidate")) { _ = session.perform(NSSelectorFromString("invalidate")) }
+  // The invalidation is a message to the phone's testmanagerd: give it time to arrive before the process ends.
+  RunLoop.current.run(until: Date().addingTimeInterval(0.8))
+}
+func loadAccessibility(_ session: AnyObject, timeout: Double) -> String? {
+  let done = DispatchSemaphore(value: 0); var ok = false; var failure: String?
+  let reply: @convention(block) (Bool, NSError?) -> Void = { loaded, e in ok = loaded; failure = e?.localizedDescription; done.signal() }
+  typealias LoadFn = @convention(c) (AnyObject, Selector, Double, AnyObject) -> Void
+  unsafeBitCast(objcCall(session, "loadAccessibilityWithTimeout:reply:"), to: LoadFn.self)(session, NSSelectorFromString("loadAccessibilityWithTimeout:reply:"), timeout, reply as AnyObject)
+  if done.wait(timeout: .now() + timeout + 1) == .timedOut { return "timed out loading accessibility" }
+  return ok ? nil : (failure ?? "accessibility load refused")
+}
+typealias BootstrapIMP = @convention(c) (AnyClass, Selector, AnyObject, Double, AnyObject?, UnsafeMutablePointer<NSError?>?) -> Bool
+var lastBootstrapError: String?
+func installPersistentBootstrap() {
   let cls: AnyClass = FBSimulatorControlFrameworkLoader.self
   let sel = NSSelectorFromString("bootstrapAccessibilityForSimulatorDevice:timeout:logger:error:")
   guard let method = class_getClassMethod(cls, sel) else { return }
   let original = unsafeBitCast(method_getImplementation(method), to: BootstrapIMP.self)
-  let block: @convention(block) (AnyClass, AnyObject, Double, AnyObject?, UnsafeMutablePointer<NSError?>?) -> Bool = { klass, device, timeout, logger, error in
-    if bootstrapDone { return true }
+  let block: @convention(block) (AnyClass, AnyObject, Double, AnyObject?, UnsafeMutablePointer<NSError?>?) -> Bool = { klass, device, timeout, logger, errorOut in
+    if skipBootstrap { return true }
+    if let session = automationSession {
+      if !forceBootstrap { return true }
+      bootstrapCount += 1; forceBootstrap = false
+      if let failure = loadAccessibility(session, timeout: 10) { lastBootstrapError = failure; return true }
+      return true
+    }
+    // The first time: the framework's own bootstrap loads the XCTest frameworks; then our session stays open.
     bootstrapCount += 1
-    let ok = original(klass, sel, device, max(timeout, 20), logger, error)
-    if ok { bootstrapDone = true }
-    return ok
+    // The XCTest frameworks the session needs, loaded the framework's way, without its throwaway session.
+    var loaded = false
+    if let loader = (FBSimulatorControlFrameworkLoader.self as AnyObject).perform(NSSelectorFromString("accessibilityAutomationFrameworks"))?.takeUnretainedValue() as? FBSimulatorControlFrameworkLoader {
+      loaded = (try? loader.loadPrivateFrameworks(logger as? FBControlCoreLogger)) != nil
+    }
+    if !loaded { _ = original(klass, sel, device, max(timeout, 20), logger, errorOut) }
+    let (session, failure) = openSession(device: device, timeout: 20)
+    guard let session else { lastBootstrapError = failure; return false }
+    if let failure = loadAccessibility(session, timeout: 10) { lastBootstrapError = failure }
+    automationSession = session; forceBootstrap = false
+    return true
   }
   method_setImplementation(method, imp_implementationWithBlock(block))
+}
+@MainActor
+func readFrontmost(_ simulator: FBSimulator, keys: Set<FBAXKeys>, nested: Bool = true) async throws -> Any {
+  for attempt in 0..<2 {
+    do {
+      let element = try await simulator.accessibilityElementForFrontmostApplication()
+      defer { element.close() }
+      let tree = withDefaults(try element.serialize(with: FBAccessibilityRequestOptions(nestedFormat: nested, keys: keys)).elements)
+      if attempt == 0 && isEmptyApp(tree) { forceBootstrap = true; continue }
+      lastTreeSignature = signature(tree)
+      return tree
+    } catch {
+      if attempt == 0 && String(describing: error).contains("No translation object") { forceBootstrap = true; continue }
+      throw error
+    }
+  }
+  return []
 }
 @MainActor
 func main() async {
   do {
     try FBSimulatorControlFrameworkLoader.essentialFrameworks.loadPrivateFrameworks(logger)
     try FBSimulatorControlFrameworkLoader.xcodeFrameworks.loadPrivateFrameworks(logger)
-    if !args.contains("--bootstrap-every-call") { bootstrapAccessibilityOnce() }
+    if !args.contains("--bootstrap-every-call") { installPersistentBootstrap() }
     let control = try FBSimulatorControl.withConfiguration(FBSimulatorControlConfiguration(deviceSetPath: nil, logger: logger, reporter: nil))
     guard let simulator = control.set.allSimulators.first(where: { $0.udid == udid }) else { throw EngineError(message: "no simulator \(udid)") }
     guard simulator.state == .booted else { throw EngineError(message: "simulator \(udid) is not booted") }
@@ -151,6 +242,12 @@ func main() async {
     watcher.surface = surface
     emit(["ready": true, "load_ms": loaded, "hid_ms": ms(hidStart), "framebuffer_ms": ms(fbStart), "framebuffer": framebuffer != nil, "surface": surface != nil, "name": simulator.name])
 
+    for sig in [SIGTERM, SIGINT, SIGHUP] {
+      signal(sig, SIG_IGN)
+      let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+      source.setEventHandler { closeSession(); exit(0) }
+      source.resume(); signalSources.append(source)
+    }
     while let line = readLine() {
       let t0 = Date()
       guard let data = line.data(using: .utf8), let req = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let op = req["op"] as? String else { emit(["ok": false, "error": "bad request"]); continue }
@@ -159,19 +256,23 @@ func main() async {
         var answer: [String: Any] = ["id": id, "ok": true]
         switch op {
         case "describe":
-          let element = try await simulator.accessibilityElementForFrontmostApplication()
-          defer { element.close() }
           var keys = outputKeys
           if let names = req["keys"] as? [String] { keys = Set(names.compactMap(keyNamed)) }
-          let response = try element.serialize(with: FBAccessibilityRequestOptions(nestedFormat: (req["nested"] as? Bool) ?? true, keys: keys))
-          answer["tree"] = withDefaults(response.elements)
+          answer["tree"] = try await readFrontmost(simulator, keys: keys, nested: (req["nested"] as? Bool) ?? true)
           answer["cpu_ms"] = cpuMs()
         case "point":
           let x = req["x"] as? Double ?? 0, y = req["y"] as? Double ?? 0
-          let element = try await simulator.accessibilityElement(at: CGPoint(x: x, y: y))
-          defer { element.close() }
-          let response = try element.serialize(with: FBAccessibilityRequestOptions(nestedFormat: false, keys: outputKeys))
-          answer["element"] = withDefaults(response.elements)
+          for attempt in 0..<2 {
+            do {
+              let element = try await simulator.accessibilityElement(at: CGPoint(x: x, y: y))
+              defer { element.close() }
+              answer["element"] = withDefaults(try element.serialize(with: FBAccessibilityRequestOptions(nestedFormat: false, keys: outputKeys)).elements)
+              break
+            } catch {
+              if attempt == 0 && String(describing: error).contains("No translation object") { forceBootstrap = true; continue }
+              throw error
+            }
+          }
         case "tap":
           let x = req["x"] as? Double ?? 0, y = req["y"] as? Double ?? 0
           try await hid.send(event: .tapAt(x: x, y: y), logger: logger)
@@ -181,6 +282,37 @@ func main() async {
         case "type":
           let text = req["text"] as? String ?? ""
           try await hid.send(event: .composite(try TextToHIDEvents.convertTextToHIDEvents(text)), logger: logger)
+        case "steps":
+          // simulator-use's input batch, as one HID composite: [{"tap":[x,y]}, {"sleep":s}, {"key":code},
+          // {"combo":{"mods":[codes],"key":code}}, {"type":"text"}, {"touch":[x,y],"hold":s}].
+          var events: [FBSimulatorHIDEvent] = []
+          for step in (req["steps"] as? [[String: Any]]) ?? [] {
+            if let p = step["tap"] as? [Double], p.count == 2 { events.append(.tapAt(x: p[0], y: p[1])) }
+            else if let s = step["sleep"] as? Double { events.append(.delay(s)) }
+            else if let k = step["key"] as? Int { events += [.keyboard(direction: .down, keyCode: UInt32(k)), .keyboard(direction: .up, keyCode: UInt32(k))] }
+            else if let c = step["combo"] as? [String: Any], let k = c["key"] as? Int {
+              let mods = ((c["mods"] as? [Int]) ?? []).map { UInt32($0) }
+              events += mods.map { .keyboard(direction: .down, keyCode: $0) }
+              events += [.keyboard(direction: .down, keyCode: UInt32(k)), .keyboard(direction: .up, keyCode: UInt32(k))]
+              events += mods.reversed().map { .keyboard(direction: .up, keyCode: $0) }
+            }
+            else if let t = step["type"] as? String { events += try TextToHIDEvents.convertTextToHIDEvents(t) }
+            else if let p = step["touch"] as? [Double], p.count == 2 {
+              events += [.touch(direction: .down, x: p[0], y: p[1]), .delay(step["hold"] as? Double ?? 0.1), .touch(direction: .up, x: p[0], y: p[1])]
+            }
+            else { throw EngineError(message: "unknown step \(step)") }
+          }
+          try await hid.send(event: .composite(events), logger: logger)
+        case "drag":
+          // A finger put down, moved in steps and lifted (sliders, reordering); a swipe is a quick drag.
+          let x1 = req["x1"] as? Double ?? 0, y1 = req["y1"] as? Double ?? 0, x2 = req["x2"] as? Double ?? 0, y2 = req["y2"] as? Double ?? 0
+          let duration = req["duration"] as? Double ?? 0.6, n = max(1, Int(req["steps"] as? Double ?? 20))
+          var events: [FBSimulatorHIDEvent] = [.touch(direction: .down, x: x1, y: y1), .delay(req["hold"] as? Double ?? 0.05)]
+          for i in 1...n { let f = Double(i) / Double(n); events += [.delay(duration / Double(n)), .touch(direction: .down, x: x1 + (x2 - x1) * f, y: y1 + (y2 - y1) * f)] }
+          events.append(.touch(direction: .up, x: x2, y: y2))
+          try await hid.send(event: .composite(events), logger: logger)
+        case "lock":
+          try await hid.send(event: .shortButtonPress(.lock), logger: logger)
         case "settle":
           let (waited, updates, settled) = await settle(watcher, quietMs: req["quiet_ms"] as? Double ?? 150, timeoutMs: req["timeout_ms"] as? Double ?? 4000, firstChangeMs: req["first_change_ms"] as? Double ?? 0)
           answer["waited_ms"] = waited; answer["updates"] = updates; answer["settled"] = settled
@@ -188,12 +320,19 @@ func main() async {
           // One call for an act: the tap, the wait until the screen stops changing, then the new tree.
           let x = req["x"] as? Double ?? 0, y = req["y"] as? Double ?? 0
           try await hid.send(event: .tapAt(x: x, y: y), logger: logger)
-          let (waited, updates, settled) = await settle(watcher, quietMs: req["quiet_ms"] as? Double ?? 150, timeoutMs: req["timeout_ms"] as? Double ?? 4000, firstChangeMs: req["first_change_ms"] as? Double ?? 500)
+          let (waited, updates, settled) = await settle(watcher, quietMs: req["quiet_ms"] as? Double ?? 150, timeoutMs: req["timeout_ms"] as? Double ?? 4000, firstChangeMs: req["first_change_ms"] as? Double ?? 800)
           let readStart = Date()
-          let element = try await simulator.accessibilityElementForFrontmostApplication()
-          defer { element.close() }
-          let response = try element.serialize(with: FBAccessibilityRequestOptions(nestedFormat: true, keys: outputKeys))
-          answer["tree"] = withDefaults(response.elements); answer["settle_ms"] = waited; answer["updates"] = updates; answer["settled"] = settled; answer["read_ms"] = ms(readStart)
+          // An app still launching reads as an application with nothing in it: wait for content, up to 3 s.
+          var tree: Any = []; var reads = 0
+          let before = lastTreeSignature
+          while true {
+            tree = try await readFrontmost(simulator, keys: outputKeys); reads += 1
+            // The screen moved but reads as before: the change (an app opening) is not in the tree yet.
+            let unchanged = updates > 0 && signature(tree) == before
+            if (!isEmptyApp(tree) && !unchanged) || Date().timeIntervalSince(readStart) > 2.5 { break }
+            _ = await settle(watcher, quietMs: 150, timeoutMs: 1000, firstChangeMs: 0)
+          }
+          answer["tree"] = tree; answer["settle_ms"] = waited; answer["updates"] = updates; answer["settled"] = settled; answer["read_ms"] = ms(readStart); answer["reads"] = reads
         case "tap_trace":
           // When the screen changes after a tap: one timestamp (ms after the tap) per surface change.
           let x = req["x"] as? Double ?? 0, y = req["y"] as? Double ?? 0, windowMs = req["window_ms"] as? Double ?? 3000
@@ -205,7 +344,18 @@ func main() async {
           }
           answer["changes"] = changes
         case "home":
-          try await hid.send(event: .shortButtonPress(.homeButton), logger: logger)
+          // A press, held briefly; if the screen did not change, once more (a press during an app's launch is dropped).
+          // With "wait": false only the press (the caller waits for the screen itself).
+          for attempt in 0..<((req["wait"] as? Bool) == false ? 1 : 2) {
+            if (req["wait"] as? Bool) == false {
+              try await hid.send(event: .composite([.button(direction: .down, button: .homeButton), .delay(0.06), .button(direction: .up, button: .homeButton)]), logger: logger)
+              break
+            }
+            try await hid.send(event: .composite([.button(direction: .down, button: .homeButton), .delay(0.06), .button(direction: .up, button: .homeButton)]), logger: logger)
+            let (_, updates, _) = await settle(watcher, quietMs: 150, timeoutMs: 3000, firstChangeMs: 600)
+            answer["attempts"] = attempt + 1; answer["updates"] = updates
+            if updates > 0 { break }
+          }
         case "screenshot":
           let png = try await simulator.takeScreenshot(format: .png)
           let shotMs = ms(t0)
@@ -244,11 +394,13 @@ func main() async {
           throw EngineError(message: "unknown op \(op)")
         }
         answer["ms"] = ms(t0); answer["bootstraps"] = bootstrapCount
+        if let failure = lastBootstrapError { answer["bootstrap_error"] = failure; lastBootstrapError = nil }
         emit(answer)
       } catch {
         emit(["id": id, "ok": false, "ms": ms(t0), "error": (error as? EngineError)?.message ?? String(describing: error)])
       }
     }
+    closeSession()
     exit(0)
   } catch {
     emit(["ready": false, "error": (error as? EngineError)?.message ?? String(describing: error)])
