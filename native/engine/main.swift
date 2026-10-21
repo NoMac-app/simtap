@@ -20,6 +20,8 @@ struct EngineError: Error { let message: String }
 let args = CommandLine.arguments
 guard let udidIndex = args.firstIndex(of: "--udid"), udidIndex + 1 < args.count else { emit(["ok": false, "error": "usage: engine --udid UDID"]); exit(2) }
 let udid = args[udidIndex + 1]
+/** A session's own device set (a folder on its volume); the user's default set when absent. */
+let deviceSetPath: String? = args.firstIndex(of: "--set").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
 let logger = FBControlCoreLoggerFactory.systemLoggerWriting(toStderr: false, withDebugLogging: false)
 FBControlCoreGlobalConfiguration.defaultLogger = logger
 
@@ -261,7 +263,7 @@ func main() async {
     try FBSimulatorControlFrameworkLoader.essentialFrameworks.loadPrivateFrameworks(logger)
     try FBSimulatorControlFrameworkLoader.xcodeFrameworks.loadPrivateFrameworks(logger)
     if !args.contains("--bootstrap-every-call") { installPersistentBootstrap() }
-    let control = try FBSimulatorControl.withConfiguration(FBSimulatorControlConfiguration(deviceSetPath: nil, logger: logger, reporter: nil))
+    let control = try FBSimulatorControl.withConfiguration(FBSimulatorControlConfiguration(deviceSetPath: deviceSetPath, logger: logger, reporter: nil))
     guard let simulator = control.set.allSimulators.first(where: { $0.udid == udid }) else { throw EngineError(message: "no simulator \(udid)") }
     guard simulator.state == .booted else { throw EngineError(message: "simulator \(udid) is not booted") }
     let loaded = ms(started)
@@ -291,7 +293,12 @@ func main() async {
         switch op {
         case "describe":
           var keys = outputKeys
-          if let names = req["keys"] as? [String] { keys = Set(names.compactMap(keyNamed)) }
+          if let names = req["keys"] as? [String] {
+            // An unknown name would silently drop that attribute from every element (AXLabel for label read as no text).
+            let unknown = names.filter { keyNamed($0) == nil }
+            if !unknown.isEmpty { throw EngineError(message: "unknown keys \(unknown.joined(separator: ", ")); the names are label, frame, value, uniqueID, type, title, frameDict, help, enabled, customActions, role, roleDescription, subrole, contentRequired, pid") }
+            keys = Set(names.compactMap(keyNamed))
+          }
           answer["tree"] = try await readFrontmost(simulator, keys: keys, nested: (req["nested"] as? Bool) ?? true)
           answer["cpu_ms"] = cpuMs()
         case "point":
