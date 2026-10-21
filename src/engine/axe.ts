@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { ToolError } from "../errors.ts";
 import type { AxNode, Frame } from "../look/snapshot.ts";
 import { run } from "./exec.ts";
-import { engineCall, engineGesture, engineSteps } from "./native.ts";
+import { engineCall, noteSessionClosed, engineGesture, engineSteps } from "./native.ts";
 import { setting } from "../settings.ts";
 
 /**
@@ -43,9 +43,11 @@ export async function describeUi(udid: string): Promise<AxNode[]> {
   }
   try {
     const { stdout } = await run(axePath(), ["describe-ui", "--udid", udid], { timeoutMs: 30_000 });
+    noteSessionClosed(udid);
     const parsed = JSON.parse(stdout) as AxNode | AxNode[];
     return Array.isArray(parsed) ? parsed : [parsed];
   } catch (error) {
+    noteSessionClosed(udid);
     if ((error as { code?: unknown }).code === "ENOENT") throw new ToolError("AXe is missing from this install.", "Reinstall simulator-use, or set SIMULATOR_USE_AXE to an axe binary.");
     if (STARTING.test((error as Error).message)) {
       throw new AccessibilityStarting("The Simulator's accessibility service is still starting; after a first boot this can take a minute or two.", "Call again in 30 seconds.");
@@ -119,9 +121,11 @@ export async function elementAt(udid: string, x: number, y: number): Promise<AxN
   try {
     // Normally 0.15 s; on a fresh Xcode 27 VM some hung for 8 to 11 s, so a slow one is abandoned for a full read.
     const { stdout } = await axe(udid, ["describe-ui", "--point", `${Math.round(x)},${Math.round(y)}`], 3_000);
+    noteSessionClosed(udid);
     const parsed = JSON.parse(stdout) as AxNode | AxNode[];
     return Array.isArray(parsed) ? parsed[0] : parsed;
   } catch {
+    noteSessionClosed(udid);
     return undefined;
   }
 }

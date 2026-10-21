@@ -1,5 +1,7 @@
-import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { type ChildProcess, execFileSync, spawn } from "node:child_process";
+import { existsSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
@@ -25,8 +27,9 @@ export type Answer = Record<string, unknown> & { ok?: boolean; error?: string; b
 const START_MS = 15_000;
 /**
  * An engine that answers nothing for this long is hung, and is ended. A request merely slower than its caller's
- * wait never ends it: a new engine on a phone booted minutes ago cannot open an automation session (measured), so
- * ending a slow one left the phone unreadable (a web field's first read took 4.2 s against a 3 s wait).
+ * wait never ends it: a new engine's first read costs 1 to 5 s and its cached web page is lost, and on a phone
+ * copied from another user's golden a new engine could not open an automation session at all (a web field's first
+ * read took 4.2 s against a 3 s wait, and ending the engine then left that phone unreadable).
  */
 const HUNG_MS = 120_000;
 
@@ -139,6 +142,26 @@ export async function engineCall(udid: string, request: Record<string, unknown>,
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Each AXe read opens and closes an automation session of its own. A phone refuses a session opened too soon after
+ * the last one closed, and then every session after it (measured on iOS 27), so the time goes where the next engine
+ * looks before opening one (native/engine: takeSessionTurn).
+ */
+export function noteSessionClosed(udid: string): void {
+  try {
+    writeFileSync(join(sessionFolder(), `simulator-use-engine-${udid}.lock`), String(Date.now() / 1000), { mode: 0o600 });
+  } catch {
+    // Best effort: the engine still waits for its own turn.
+  }
+}
+
+let folder: string | undefined;
+/** Where the engine keeps its lock: $TMPDIR, else the user's own temporary folder (as NSTemporaryDirectory()). */
+function sessionFolder(): string {
+  folder ??= process.env.TMPDIR || execFileSync("getconf", ["DARWIN_USER_TEMP_DIR"], { encoding: "utf8" }).trim() || tmpdir();
+  return folder;
 }
 
 /** Ends this process's engines (tests, and a phone that was shut down). */

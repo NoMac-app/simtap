@@ -371,9 +371,12 @@ async function act(udid: string, deviceLabel: string, lines: string[], called: n
         };
         while (!met()) {
           if (Date.now() >= deadline) {
+            // What the on-screen keyboard covers is not listed: on a phone without a hardware keyboard (a cloud
+            // phone) a label under a field just filled is hidden that way.
+            const covered = step.op === "wait" && snap.keyboard ? ` It may be under the keyboard (covering y ${snap.keyboardTop ?? "?"} and below), which is not listed: key return or a tap outside the field hides it.` : "";
             throw new StepFailure(
               `${describeTarget(step.target)} ${step.op === "wait" ? "did not appear" : "was still there"} after ${step.seconds} s.`,
-              `The screen is below. Wait longer with ${step.op} ${describeTarget(step.target)} 15, or act on what is there.`,
+              `The screen is below. Wait longer with ${step.op} ${describeTarget(step.target)} 15, or act on what is there.${covered}`,
             );
           }
           await sleep(250);

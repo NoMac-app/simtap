@@ -40,7 +40,10 @@ export async function readTestReport(bundle: string): Promise<TestReport> {
     });
     return JSON.parse(out.stdout);
   };
-  const [summary, tests] = await Promise.all([get("summary"), get("tests")]);
+  // One read at a time: xcresulttool builds the bundle's database on the first read, and two first reads at once
+  // fail with "XCResultDataViews.Database.DBError error 0" (Xcode 27, a warm rebuild read 3 s after it started).
+  const summary = await get("summary");
+  const tests = await get("tests");
   const failures = failuresIn(tests.testNodes ?? []);
   // Xcode 26 starts a failure message with "File.swift:12: "; Xcode 27 keeps the place in the test's details.
   for (const f of failures.filter((x) => !/^[^\s/:]+\.\w+:\d+: /.test(x.message)).slice(0, 10)) {

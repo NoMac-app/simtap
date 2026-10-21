@@ -180,7 +180,24 @@ func objcCall(_ target: AnyObject, _ name: String) -> IMP? {
   if let cls = target as? AnyClass { return class_getMethodImplementation(object_getClass(cls), sel) }
   return class_getMethodImplementation(object_getClass(target), sel)
 }
+var sessionTurnMs = 0, sessionRecoveries = 0
+/** The phone's XCTest daemons stopped inside it (launchd starts them again on the next request). */
+func restartTestDaemons() {
+  for label in ["com.apple.testmanagerd", "com.apple.dt.automationmode-writer", "com.apple.dt.AutomationModeUI"] {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+    process.arguments = ["simctl"] + (deviceSetPath.map { ["--set", $0] } ?? []) + ["spawn", udid, "launchctl", "stop", label]
+    process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+    try? process.run(); process.waitUntilExit()
+  }
+  Thread.sleep(forTimeInterval: 2)
+}
 func openSession(device: AnyObject, timeout: Double) -> (AnyObject?, String?) {
+  sessionTurnMs = takeSessionTurn()
+  sessionLog("open after waiting \(sessionTurnMs) ms")
+  let opened = Date()
+  var outcome = "failed"
+  defer { sessionLog("open \(outcome) in \(ms(opened)) ms"); unlockSessionTurn() }
   guard let providerClass: AnyClass = NSClassFromString("XCUIDeviceRemoteDaemonConnectionProvider"),
         let sessionClass: AnyClass = NSClassFromString("XCUIDeviceRemoteAutomationSession") else { return (nil, "XCTest automation classes unavailable") }
   typealias ProviderFn = @convention(c) (AnyClass, Selector, AnyObject) -> Unmanaged<AnyObject>?
@@ -190,22 +207,70 @@ func openSession(device: AnyObject, timeout: Double) -> (AnyObject?, String?) {
   let completion: @convention(block) (AnyObject?, NSError?) -> Void = { s, e in session = s; failure = e?.localizedDescription; done.signal() }
   typealias RequestFn = @convention(c) (AnyClass, Selector, AnyObject, AnyObject) -> Void
   unsafeBitCast(objcCall(sessionClass, "requestSessionWithDaemonConnectionProvider:completion:"), to: RequestFn.self)(sessionClass, NSSelectorFromString("requestSessionWithDaemonConnectionProvider:completion:"), provider, completion as AnyObject)
-  if done.wait(timeout: .now() + timeout) == .timedOut { return (nil, "timed out creating the remote automation session") }
+  if done.wait(timeout: .now() + timeout) == .timedOut { outcome = "timed out"; return (nil, "timed out creating the remote automation session") }
   guard let session else { return (nil, failure ?? "no session") }
   typealias EnableFn = @convention(c) (AnyObject, Selector, UnsafeMutablePointer<NSError?>?) -> Bool
   if session.responds(to: NSSelectorFromString("enableAutomationModeWithError:")) {
     var error: NSError?
     if !unsafeBitCast(objcCall(session, "enableAutomationModeWithError:"), to: EnableFn.self)(session, NSSelectorFromString("enableAutomationModeWithError:"), &error) { return (nil, "automation mode: \(error?.localizedDescription ?? "refused")") }
   }
+  outcome = "ok"
   return (session, nil)
 }
 /** Ends the automation session so the phone accepts the next client's session (a session left open blocks them). */
+/**
+ * A phone takes a new automation session only a while after the last one closed: a second engine started as the
+ * first one exited (0.8 s after its close) failed, and so did every session after it, for good (until a reboot;
+ * measured on the M6). So opening and closing a session are done under a lock file per phone in the user's
+ * temporary folder (held only for that, never for a session's life: sessions side by side are fine), which also
+ * holds the time the last session closed; an engine opens only 2 s after it. simulator-use writes the time too
+ * after an AXe read, which opens and closes a session of its own.
+ */
+let sessionGapSeconds = 2.0
+var sessionLockFD: Int32 = -1
+/** The user's temporary folder: $TMPDIR as simulator-use sees it (os.tmpdir()), else NSTemporaryDirectory(). */
+func sessionFolder() -> String {
+  if let tmp = ProcessInfo.processInfo.environment["TMPDIR"], !tmp.isEmpty { return tmp.hasSuffix("/") ? tmp : tmp + "/" }
+  return NSTemporaryDirectory()
+}
+func sessionLockPath() -> String { sessionFolder() + "simulator-use-engine-\(udid).lock" }
+/** One line per session event, beside the lock (what a stuck phone went through). */
+func sessionLog(_ event: String) {
+  let line = "\(String(format: "%.3f", Date().timeIntervalSince1970)) pid \(getpid()) \(event)\n"
+  let path = sessionFolder() + "simulator-use-engine-\(udid).log"
+  if let handle = FileHandle(forWritingAtPath: path) { handle.seekToEndOfFile(); handle.write(line.data(using: .utf8)!); handle.closeFile() }
+  else { FileManager.default.createFile(atPath: path, contents: line.data(using: .utf8), attributes: [.posixPermissions: 0o600]) }
+}
+func lastSessionClose() -> Double {
+  guard let text = try? String(contentsOfFile: sessionLockPath(), encoding: .utf8) else { return 0 }
+  return Double(text.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+}
+/** The lock for one open or close (another engine's open can take up to half a minute). */
+func lockSessionTurn(maxWait: TimeInterval) {
+  let start = Date()
+  if sessionLockFD < 0 { sessionLockFD = open(sessionLockPath(), O_CREAT | O_RDWR, 0o600) }
+  guard sessionLockFD >= 0 else { return }
+  while flock(sessionLockFD, LOCK_EX | LOCK_NB) != 0 && Date().timeIntervalSince(start) < maxWait { usleep(50_000) }
+}
+func unlockSessionTurn() { if sessionLockFD >= 0 { flock(sessionLockFD, LOCK_UN) } }
+/** Before a session is opened: the lock, then the gap since the last close. Returns the ms waited. */
+func takeSessionTurn() -> Int {
+  let start = Date()
+  lockSessionTurn(maxWait: 60)
+  let wait = lastSessionClose() + sessionGapSeconds - Date().timeIntervalSince1970
+  if wait > 0 { usleep(UInt32(min(wait, sessionGapSeconds) * 1_000_000)) }
+  return ms(start)
+}
 func closeSession() {
   guard let session = automationSession else { return }
   automationSession = nil
+  lockSessionTurn(maxWait: 10)
+  sessionLog("close")
   if session.responds(to: NSSelectorFromString("invalidate")) { _ = session.perform(NSSelectorFromString("invalidate")) }
   // The invalidation is a message to the phone's testmanagerd: give it time to arrive before the process ends.
   RunLoop.current.run(until: Date().addingTimeInterval(0.8))
+  try? String(Date().timeIntervalSince1970).write(toFile: sessionLockPath(), atomically: false, encoding: .utf8)
+  unlockSessionTurn()
 }
 func loadAccessibility(_ session: AnyObject, timeout: Double) -> String? {
   let done = DispatchSemaphore(value: 0); var ok = false; var failure: String?
@@ -238,7 +303,13 @@ func installPersistentBootstrap() {
       loaded = (try? loader.loadPrivateFrameworks(logger as? FBControlCoreLogger)) != nil
     }
     if !loaded { _ = original(klass, sel, device, max(timeout, 20), logger, errorOut) }
-    let (session, failure) = openSession(device: device, timeout: 20)
+    var (session, failure) = openSession(device: device, timeout: 12)
+    if session == nil {
+      // A phone that refuses sessions (after one opened too soon after another closed it refuses them for good)
+      // takes them again once its test daemon is restarted: no reboot, the apps stay as they are (measured).
+      sessionLog("refused: the phone's test daemons restarted"); restartTestDaemons(); sessionRecoveries += 1
+      (session, failure) = openSession(device: device, timeout: 20)
+    }
     guard let session else { lastBootstrapError = failure; return false }
     if let failure = loadAccessibility(session, timeout: 10) { lastBootstrapError = failure }
     automationSession = session; forceBootstrap = false
@@ -250,6 +321,16 @@ func nodeCount(_ tree: Any) -> Int {
   if let list = tree as? [Any] { return list.reduce(0) { $0 + nodeCount($1) } }
   guard let n = tree as? [String: Any] else { return 0 }
   return 1 + ((n["children"] as? [Any]).map(nodeCount) ?? 0)
+}
+/**
+ * A number from FBSimulatorControl's dictionaries. A pid comes as a pid_t (Int32) inside Any, which `as? Int`
+ * does not take: every pid read that way was nil.
+ */
+func intValue(_ value: Any?) -> Int? {
+  if let i = value as? Int { return i }
+  if let i = value as? Int32 { return Int(i) }
+  if let n = value as? NSNumber { return n.intValue }
+  return nil
 }
 /** An element's frame: FBSimulatorControl's "frame" dictionary, or its "AXFrame" string. */
 func frameOf(_ node: [String: Any]) -> CGRect? {
@@ -279,8 +360,11 @@ func isEmptyWebArea(_ node: [String: Any], screen: CGRect) -> CGRect? {
  * own containers) say nothing and are passed in 20-point steps (a line of text is at least 20 points tall).
  */
 @MainActor
-func webScan(_ simulator: FBSimulator, region: CGRect, deadline: Date, appPid: Int) async -> (elements: [[String: Any]], reads: Int, complete: Bool) {
+func webScan(_ simulator: FBSimulator, region: CGRect, deadline: Date, appPid: Int) async -> (elements: [[String: Any]], reads: Int, complete: Bool, web: Bool) {
   var found: [[String: Any]] = [], seen = Set<String>(), covered: [CGRect] = [], reads = 0
+  // Any element from another process (the web process) shows the area is a page. 24 reads with none (a map, a
+  // game, custom drawing, an empty list): not a page, and the sweep stops.
+  var foreign = false
   let area = region.width * region.height
   func ordered() -> [[String: Any]] {
     found.sorted { a, b in
@@ -292,7 +376,8 @@ func webScan(_ simulator: FBSimulator, region: CGRect, deadline: Date, appPid: I
     let x = region.minX + region.width * share
     var y = region.minY + 4
     while y < region.maxY - 2 {
-      if Date() > deadline || reads >= 400 { return (ordered(), reads, false) }
+      if Date() > deadline || reads >= 600 { return (ordered(), reads, false, true) }
+      if reads >= 24 && !foreign { return ([], reads, true, false) }
       if let inside = covered.first(where: { $0.minX <= x && x <= $0.maxX && $0.minY <= y && y <= $0.maxY }) { y = inside.maxY + 1; continue }
       reads += 1
       var hit: [String: Any]? = nil
@@ -300,9 +385,10 @@ func webScan(_ simulator: FBSimulator, region: CGRect, deadline: Date, appPid: I
         hit = (try? element.serialize(with: FBAccessibilityRequestOptions(nestedFormat: false, keys: outputKeys)).elements).map(withDefaults) as? [String: Any]
         element.close()
       }
+      if let pid = intValue(hit?["pid"]), pid != appPid, pid > 0 { foreign = true }
       guard let node = hit, let frame = frameOf(node), frame.width > 0, frame.height > 0, frame.width * frame.height < area * 0.5 else { y += 20; continue }
       // The app's own elements over the page (a keyboard's bar, a toolbar) are in its tree already: jump past them.
-      let fromApp = (node["pid"] as? Int) == appPid
+      let fromApp = intValue(node["pid"]) == appPid
       let key = "\(node["role"] ?? "")|\(node["AXLabel"] ?? "")|\(node["AXValue"] ?? "")|\(Int(frame.minX)),\(Int(frame.minY)),\(Int(frame.width)),\(Int(frame.height))"
       if !fromApp && seen.insert(key).inserted {
         var element = node
@@ -314,15 +400,38 @@ func webScan(_ simulator: FBSimulator, region: CGRect, deadline: Date, appPid: I
       y = max(y + 4, frame.maxY + 1)
     }
   }
-  return (ordered(), reads, true)
+  // A small control left of its text (a checkbox, a radio button, an icon) falls between the columns: one point
+  // read just left of each text found.
+  for text in found where (text["role"] as? String) == "AXStaticText" {
+    guard let frame = frameOf(text), frame.minX - 6 > region.minX else { continue }
+    let point = CGPoint(x: frame.minX - 6, y: frame.midY)
+    if covered.contains(where: { $0.contains(point) }) { continue }
+    if Date() > deadline || reads >= 600 { return (ordered(), reads, false, true) }
+    reads += 1
+    var hit: [String: Any]? = nil
+    if let element = try? await simulator.accessibilityElement(at: point) {
+      hit = (try? element.serialize(with: FBAccessibilityRequestOptions(nestedFormat: false, keys: outputKeys)).elements).map(withDefaults) as? [String: Any]
+      element.close()
+    }
+    guard let node = hit, let f = frameOf(node), f.width > 0, f.height > 0, f.width * f.height < area * 0.5, intValue(node["pid"]) != appPid else { continue }
+    let key = "\(node["role"] ?? "")|\(node["AXLabel"] ?? "")|\(node["AXValue"] ?? "")|\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width)),\(Int(f.height))"
+    if seen.insert(key).inserted {
+      var element = node
+      element["found_by"] = "point_scan"
+      if element["children"] == nil { element["children"] = [Any]() }
+      found.append(element)
+    }
+    covered.append(f)
+  }
+  return (ordered(), reads, true, true)
 }
 /** The tree with each empty web area filled from webScan (or from the last scan, while the screen is unchanged). */
 @MainActor
 func withWebContent(_ simulator: FBSimulator, _ tree: Any) async -> Any {
   guard var roots = tree as? [[String: Any]], let screen = roots.first.flatMap(frameOf), screen.width > 0 else { return tree }
   let start = Date(), deadline = start.addingTimeInterval(webBudget), seedBefore = screenWatcher?.currentSeed()
-  let appPid = (roots.first?["pid"] as? Int) ?? -1
-  var areas = 0, reads = 0, complete = true, cached = false, count = 0
+  let appPid = intValue(roots.first?["pid"]) ?? -1
+  var areas = 0, reads = 0, complete = true, cached = false, count = 0, pages = 0
   func fill(_ node: [String: Any]) async -> [String: Any] {
     if let region = isEmptyWebArea(node, screen: screen) {
       areas += 1
@@ -332,7 +441,7 @@ func withWebContent(_ simulator: FBSimulator, _ tree: Any) async -> Any {
         elements = last.elements; cached = true
       } else {
         let scan = await webScan(simulator, region: region, deadline: deadline, appPid: appPid)
-        elements = scan.elements; reads += scan.reads; complete = complete && scan.complete
+        elements = scan.elements; reads += scan.reads; complete = complete && scan.complete; if scan.web { pages += 1 }
         // Only a whole scan of pixels that did not change while it ran is kept for the next read.
         if let seed, scan.complete, screenWatcher?.currentSeed() == seed { lastWebScan = (seed, region, elements) } else { lastWebScan = nil }
       }
@@ -349,7 +458,7 @@ func withWebContent(_ simulator: FBSimulator, _ tree: Any) async -> Any {
   }
   for i in roots.indices { roots[i] = await fill(roots[i]) }
   if areas > 0 {
-    lastReadReport["web_scan"] = ["areas": areas, "reads": reads, "elements": count, "complete": complete, "cached": cached, "ms": ms(start),
+    lastReadReport["web_scan"] = ["areas": areas, "pages": pages, "reads": reads, "elements": count, "complete": complete, "cached": cached, "ms": ms(start),
       "seed_before": seedBefore.map { Int($0) } ?? -1, "seed_after": screenWatcher?.currentSeed().map { Int($0) } ?? -1]
   }
   return roots
@@ -384,10 +493,11 @@ func readFrontmost(_ simulator: FBSimulator, keys: Set<FBAXKeys>, nested: Bool =
     do {
       var tree = try await serializeFrontmost(simulator, keys: keys, nested: nested)
       if attempt == 0 && isEmptyApp(tree) { forceBootstrap = true; reloaded = true; continue }
-      // A different app in front (one opened or closed) fills in its elements over a moment: read again until two
-      // reads agree, up to 2 s. Within one app a single read is enough.
-      let pid = ((tree as? [[String: Any]])?.first?["pid"] as? Int) ?? -1
-      if reloaded || pid != lastFrontPid {
+      // After accessibility was reloaded (an app that read empty), its elements fill in over a moment: read again
+      // until two reads agree, up to 2 s. A newly opened app is read again by simulator-use (opening() in
+      // src/look/read.ts); the pid comparison that once did it here never fired (pids came back nil), and every
+      // measurement of the day was made without it, so it stays off.
+      if reloaded {
         let start = Date()
         while Date().timeIntervalSince(start) < 2 {
           try? await Task.sleep(nanoseconds: 250_000_000)
@@ -398,7 +508,7 @@ func readFrontmost(_ simulator: FBSimulator, keys: Set<FBAXKeys>, nested: Bool =
           if same && !isEmptyApp(tree) && nodeCount(tree) >= 12 { break }
         }
       }
-      lastFrontPid = ((tree as? [[String: Any]])?.first?["pid"] as? Int) ?? -1
+      lastFrontPid = intValue((tree as? [[String: Any]])?.first?["pid"]) ?? -1
       if webScanOn { tree = await withWebContent(simulator, tree) }
       lastTreeSignature = signature(tree)
       return tree
@@ -444,6 +554,18 @@ func main() async {
       do {
         var answer: [String: Any] = ["id": id, "ok": true]
         switch op {
+        case "methods":
+          // A look at a private class's methods (exploration): {"op":"methods","class":"XCUIDeviceRemoteAutomationSession"}.
+          guard let name = req["class"] as? String, let cls: AnyClass = NSClassFromString(name) else { throw EngineError(message: "no such class") }
+          func list(_ c: AnyClass) -> [String] {
+            var count: UInt32 = 0
+            guard let methods = class_copyMethodList(c, &count) else { return [] }
+            defer { free(methods) }
+            return (0..<Int(count)).map { NSStringFromSelector(method_getName(methods[$0])) }.sorted()
+          }
+          answer["instance"] = list(cls)
+          if let meta = object_getClass(cls) { answer["class_methods"] = list(meta) }
+          answer["superclass"] = class_getSuperclass(cls).map { NSStringFromClass($0) } ?? ""
         case "describe":
           var keys = outputKeys
           if let names = req["keys"] as? [String] {
@@ -457,6 +579,8 @@ func main() async {
           defer { readRemote = nil; readProfile = false; webScanOn = true; webBudget = 2.5 }
           answer["tree"] = try await readFrontmost(simulator, keys: keys, nested: (req["nested"] as? Bool) ?? true)
           answer["cpu_ms"] = cpuMs(); answer["serialize_ms"] = lastSerializeMs
+          if sessionTurnMs > 0 { answer["session_wait_ms"] = sessionTurnMs; sessionTurnMs = 0 }
+          if sessionRecoveries > 0 { answer["session_recoveries"] = sessionRecoveries }
           for (key, value) in lastReadReport { answer[key] = value }
         case "point":
           let x = req["x"] as? Double ?? 0, y = req["y"] as? Double ?? 0

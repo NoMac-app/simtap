@@ -28,7 +28,8 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test 'test/**/*.test.ts'",
     "axe": "node scripts/fetch-axe.mjs",
-    "prepack": "node scripts/fetch-axe.mjs && npm run build"
+    "prepack": "node scripts/fetch-axe.mjs && node scripts/build-native.mjs && npm run build",
+    "native": "node scripts/build-native.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

@@ -19,6 +19,8 @@ export type AxNode = {
   enabled?: boolean;
   frame?: Frame;
   children?: AxNode[];
+  /** "point_scan": read from a web page by the engine's web scan (native/engine), not from the app's own tree. */
+  found_by?: string;
 };
 
 /** One element the agent can see, with the point to tap it. */
@@ -93,7 +95,8 @@ function kindOf(node: AxNode, inTabGroup: boolean): string | null {
   const role = node.role ?? "";
   if (role === "AXButton" && node.role_description === "back button") return "back";
   if (role === "AXTextField" && node.subrole === "AXSecureTextField") return "securefield";
-  if (role === "AXCheckBox" && node.subrole === "AXSwitch") return "switch";
+  // A web page's checkbox comes as a switch too (WebKit on iOS): call it what the page has.
+  if (role === "AXCheckBox" && node.subrole === "AXSwitch") return node.found_by === "point_scan" ? "checkbox" : "switch";
   // A tab button inside a tab group is a segment of a segmented control; any other is a tab: in the iPhone's
   // tab bar, or in the iPad's, which sits at the top with no "Tab Bar" group around it.
   if (role === "AXRadioButton" && node.subrole === "AXTabButton") return inTabGroup ? "segment" : "tab";
@@ -369,7 +372,10 @@ export function snapshot(tree: AxNode | AxNode[]): Snapshot {
     for (const child of node.children ?? []) walk(child, nextOwner, nowInBar, node.role === "AXTabGroup", label || parentLabel);
   };
   nodes.forEach((root) => walk(root, null, false, false, ""));
-  result.elements = withoutLetterRuns(withoutRepeatedLabels(result.elements));
+  // A text that is only punctuation ("|" and "(" between a web page's links) says nothing; after the letter runs
+  // are joined, so an apostrophe inside an animated word stays.
+  const says = (e: Element) => !(e.kind === "text" && !e.id && e.label && !/[\p{L}\p{N}\p{Extended_Pictographic}]/u.test(e.label));
+  result.elements = withoutLetterRuns(withoutRepeatedLabels(result.elements)).filter(says);
   return result;
 }
 

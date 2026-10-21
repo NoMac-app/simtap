@@ -228,3 +228,32 @@ test("a web page read by the engine: headings, texts, fields and links, beside t
   assert.match(out, /^text "• Item 11" @73,865$/m);
   assert.doesNotMatch(out, /unreadable/);
 });
+
+test("texts that are only punctuation are left out; emoji and numbers stay", () => {
+  const node = (role: string, label: string | null, value: string | null, x: number, y: number) =>
+    ({ role, AXLabel: label, AXValue: value, frame: { x, y, width: 60, height: 20 }, children: [] }) as AxNode;
+  const page: AxNode[] = [{
+    role: "AXApplication", AXLabel: "News", frame: { x: 0, y: 0, width: 402, height: 874 },
+    children: [
+      node("AXLink", "comments", "comments", 20, 120), node("AXStaticText", "", "|", 90, 120), node("AXStaticText", "", "(", 100, 150),
+      node("AXStaticText", "", "🚀", 20, 180), node("AXStaticText", "", "42", 20, 210), node("AXStaticText", "", "Points", 20, 240),
+    ],
+  }];
+  const out = render(snapshot(page), { device: "iPhone 17 Pro (iOS 27.0)" });
+  assert.match(out, /^link "comments" @50,130$/m);
+  assert.doesNotMatch(out, /"\|"|"\("/);
+  assert.match(out, /^text "🚀"/m);
+  assert.match(out, /^text "42"/m);
+  assert.match(out, /^text "Points"/m);
+});
+
+test("a web page's checkbox, which WebKit reports as a switch, is a checkbox; a native switch stays a switch", () => {
+  const box = (label: string, scanned: boolean, y: number) => ({
+    role: "AXCheckBox", subrole: "AXSwitch", AXLabel: label, AXValue: "0", frame: { x: 16, y, width: 120, height: 24 }, children: [],
+    ...(scanned ? { found_by: "point_scan" } : {}),
+  }) as AxNode;
+  const screen: AxNode[] = [{ role: "AXApplication", AXLabel: "Shop", frame: { x: 0, y: 0, width: 402, height: 874 }, children: [box("Bacon", true, 200), box("Wi-Fi", false, 260)] }];
+  const out = render(snapshot(screen), { device: "iPhone 17 Pro (iOS 27.0)" });
+  assert.match(out, /^checkbox "Bacon" off @76,212$/m);
+  assert.match(out, /^switch "Wi-Fi" off @76,272$/m);
+});

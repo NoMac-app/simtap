@@ -56,11 +56,13 @@ export const testsRun: Tool = {
       progress.setCancel(undefined);
       progress.setLog(result.log);
       const seconds = (result.ms / 1000).toFixed(1);
+      let reason = "";
       const report = await readTestReport(bundle).catch((error: Error) => {
         if (setting("DEBUG")) process.stderr.write(`simulator-use: reading ${bundle}: ${error.message}\n`);
+        reason = error.message.split("\n")[0]!.slice(0, 200);
         return undefined;
       });
-      if (!report && result.ok) return { text: `The tests of ${scheme} ran (xcodebuild succeeded in ${seconds} s), but their result bundle couldn't be read: ${bundle}. Full log: ${result.log}`, isError: true };
+      if (!report && result.ok) return { text: `The tests of ${scheme} ran (xcodebuild succeeded in ${seconds} s), but their result bundle couldn't be read${reason ? ` (${reason})` : ""}: ${bundle}. Full log: ${result.log}`, isError: true };
       if (!report) {
         // No result bundle: the tests never ran, so the build is what failed.
         const errors = result.errors.slice(0, 15).map((e) => formatIssue(e, project.dir));
