@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { ToolError } from "../errors.ts";
 import { isOurs, run } from "./exec.ts";
@@ -152,12 +153,30 @@ export async function pushPayload(udid: string, bundleId: string, payload: strin
 
 /** Puts text on the Simulator's clipboard, for pasting what the keyboard can't type (é, 日本, emoji). */
 export async function setPasteboard(udid: string, text: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn("xcrun", ["simctl", "pbcopy", udid], { stdio: ["pipe", "ignore", "pipe"] });
-    let stderr = "";
-    child.stderr.on("data", (d) => (stderr += d));
-    child.on("error", reject);
-    child.on("close", (code) => (code === 0 ? resolve() : reject(new ToolError(`Could not set the Simulator's clipboard: ${stderr.trim()}`))));
-    child.stdin.end(text);
-  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn("xcrun", ["simctl", "pbcopy", udid], { stdio: ["pipe", "ignore", "pipe"] });
+      let stderr = "";
+      child.stderr.on("data", (d) => (stderr += d));
+      child.on("error", reject);
+      child.on("close", (code, signal) => (code === 0 ? resolve() : reject(new ToolError(`Could not set the Simulator's clipboard: ${stderr.trim() || signal || `exit ${code}`}`))));
+      child.stdin.end(text);
+    });
+  } catch (error) {
+    // A macOS user with no screen session (a shared Simulator host's users) has no pasteboard server, and simctl
+    // pbcopy crashes: the helper sets the phone's own pasteboard from inside the phone instead.
+    const helper = pasteHelper();
+    if (!helper) throw error;
+    try {
+      await simctl(["spawn", udid, helper, text], 15_000);
+    } catch (fallback) {
+      throw new ToolError(`Could not set the Simulator's clipboard: ${(error as Error).message}; from inside the phone: ${(fallback as Error).message}`);
+    }
+  }
+}
+
+/** native/pbset, built for the Simulator, beside the engine in vendor/axe; undefined when it is not there. */
+export function pasteHelper(): string | undefined {
+  const bundled = fileURLToPath(new URL("../../vendor/axe/simulator-use-pbset", import.meta.url));
+  return existsSync(bundled) ? bundled : undefined;
 }
