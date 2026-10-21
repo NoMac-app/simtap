@@ -25,7 +25,9 @@ let deviceSetPath: String? = args.firstIndex(of: "--set").flatMap { $0 + 1 < arg
 let logger = FBControlCoreLoggerFactory.systemLoggerWriting(toStderr: false, withDebugLogging: false)
 FBControlCoreGlobalConfiguration.defaultLogger = logger
 
-let outputKeys: Set<FBAXKeys> = [.label, .frame, .value, .uniqueID, .type, .title, .frameDict, .help, .enabled, .customActions, .role, .roleDescription, .subrole, .contentRequired, .pid]
+// Custom actions are left out unless asked for (keys): simulator-use never shows them, and on a web page a read with
+// them took about 2 s in one run (0.1 s in another) against 60 to 400 ms without.
+let outputKeys: Set<FBAXKeys> = [.label, .frame, .value, .uniqueID, .type, .title, .frameDict, .help, .enabled, .role, .roleDescription, .subrole, .contentRequired, .pid]
 
 func keyNamed(_ name: String) -> FBAXKeys? {
   switch name {
@@ -45,6 +47,8 @@ func cpuMs() -> Int {
 /** The last tree any read returned, to tell a screen that moved but did not change yet (an app still opening). */
 var lastTreeSignature = 0
 var lastFrontPid = -1
+/** How long each accessibility read of the last readFrontmost took, in ms (the describe answer carries it). */
+var lastSerializeMs: [Int] = []
 /** What the screen shows, not how it is drawn: kinds, labels and ids (a pressed icon or a moving frame is the same screen). */
 func signature(_ tree: Any) -> Int {
   var hasher = Hasher()
@@ -225,11 +229,14 @@ func nodeCount(_ tree: Any) -> Int {
 @MainActor
 func readFrontmost(_ simulator: FBSimulator, keys: Set<FBAXKeys>, nested: Bool = true) async throws -> Any {
   var reloaded = false
+  lastSerializeMs = []
   for attempt in 0..<2 {
     do {
+      let readStart = Date()
       let element = try await simulator.accessibilityElementForFrontmostApplication()
       var tree = withDefaults(try element.serialize(with: FBAccessibilityRequestOptions(nestedFormat: nested, keys: keys)).elements)
       element.close()
+      lastSerializeMs.append(ms(readStart))
       if attempt == 0 && isEmptyApp(tree) { forceBootstrap = true; reloaded = true; continue }
       // A different app in front (one opened or closed) fills in its elements over a moment: read again until two
       // reads agree, up to 2 s. Within one app a single read is enough.
@@ -238,9 +245,11 @@ func readFrontmost(_ simulator: FBSimulator, keys: Set<FBAXKeys>, nested: Bool =
         let start = Date()
         while Date().timeIntervalSince(start) < 2 {
           try? await Task.sleep(nanoseconds: 250_000_000)
+          let againStart = Date()
           let again = try await simulator.accessibilityElementForFrontmostApplication()
           let next = withDefaults(try again.serialize(with: FBAccessibilityRequestOptions(nestedFormat: nested, keys: keys)).elements)
           again.close()
+          lastSerializeMs.append(ms(againStart))
           let same = signature(next) == signature(tree)
           tree = next
           // Two equal reads of a nearly empty app are its shell before the content: not settled yet.
@@ -300,7 +309,7 @@ func main() async {
             keys = Set(names.compactMap(keyNamed))
           }
           answer["tree"] = try await readFrontmost(simulator, keys: keys, nested: (req["nested"] as? Bool) ?? true)
-          answer["cpu_ms"] = cpuMs()
+          answer["cpu_ms"] = cpuMs(); answer["serialize_ms"] = lastSerializeMs
         case "point":
           let x = req["x"] as? Double ?? 0, y = req["y"] as? Double ?? 0
           for attempt in 0..<2 {
