@@ -32,6 +32,15 @@ What makes that possible:
   phone is rebooted. A host also needs `automationmodetool enable-automationmode-without-authentication` once.
 - **"Settled" is read from the screen buffer**, not from repeated tree reads: the IOSurface seed changes on every
   write. After an input the engine waits up to 500 ms for the first change, then for 150 ms without one.
+- **One engine per phone, for its life.** A second engine process on a phone booted a few minutes earlier cannot
+  open an automation session (12 of 12 failed on the M6), so a slow request must never end the engine:
+  simulator-use gives the caller a busy answer and the engine finishes (its late answer is read and dropped).
+- **Web pages are read point by point.** A WKWebView's or Safari's page is drawn by its own web process: the app's
+  tree holds only an empty scroll area there, and FBSimulatorControl's remote-content phase skips it (the area's
+  own frame counts as covered). Every read sweeps such an area with point reads (five columns, jumping past each
+  element found; 2.5 s budget, `web_budget_ms`, `web: false` to skip) and adds the page's elements under it,
+  reused while the IOSurface seed is unchanged. A page's text comes in `AXValue`. Safari's first read of a page
+  takes 15 to 30 s; part of a Safari page can stay hidden behind a full-screen group (best effort).
 
 Video: `stream` uses the Mac's hardware encoder (H.264 or HEVC, Annex B, fragmented MP4 or MPEG-TS): about
 1.1 to 1.4 Mbit/s at 30 fps and half resolution, first data after 39 to 245 ms, 7% of one core.
