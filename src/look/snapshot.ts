@@ -57,6 +57,10 @@ const STATUS_BAR_BOTTOM = 50;
 const SCROLL_BAR = /^(Vertical|Horizontal) scroll bar, (\d+) pages?$/;
 const CONTROLS = new Set(["button", "back", "tab", "segment", "link", "cell", "switch", "checkbox", "radio", "slider", "stepper", "popup", "menu", "picker", "textfield", "securefield", "searchfield", "textview"]);
 const FIELDS = new Set(["textfield", "securefield", "searchfield", "textview"]);
+/** Kinds whose words can be in their value alone: a web page's text, headings and links (read from its own process). */
+const VALUE_NAMED = new Set(["text", "heading", "link"]);
+/** A static text's words: its label, or a web page's, which come as its value. */
+const wordsOf = (n: AxNode) => text(n.AXLabel) || (n.role === "AXStaticText" || n.role === "AXHeading" || n.role === "AXLink" ? text(n.AXValue) : "");
 /** UIKit names a navigation bar after its view controller's class when it has no title. */
 const MANGLED = /^_Tt|^[A-Za-z0-9]+(Controller|Hosting)$/;
 const ROLE_KINDS: Record<string, string> = {
@@ -133,14 +137,14 @@ function isKeyboard(node: AxNode): boolean {
 /** Whether a subtree holds anything an agent could read: a labeled element that isn't a scroll bar or the keyboard. */
 function readable(node: AxNode): boolean {
   if (isKeyboard(node)) return false;
-  const label = text(node.AXLabel);
+  const label = wordsOf(node);
   if (!CONTAINERS.has(node.role ?? "") && (label || text(node.AXUniqueId)) && !SCROLL_BAR.test(label)) return true;
   return (node.children ?? []).some(readable);
 }
 
 /** Whether a node itself (not its children) has something to read. */
 function readableOwn(n: AxNode): boolean {
-  const label = text(n.AXLabel);
+  const label = wordsOf(n);
   return !CONTAINERS.has(n.role ?? "") && Boolean(label || text(n.AXUniqueId)) && !SCROLL_BAR.test(label) && !isKeyboard(n);
 }
 
@@ -329,7 +333,7 @@ export function snapshot(tree: AxNode | AxNode[]): Snapshot {
       let value = tidy(text(node.AXValue));
       if (kind === "switch" || kind === "checkbox" || kind === "tab" || kind === "segment" || kind === "radio") value = "";
       // A field with no label shows its placeholder or its text as the value; name it by that.
-      const name = label || (FIELDS.has(kind) ? value : "");
+      const name = label || (FIELDS.has(kind) || VALUE_NAMED.has(kind) ? value : "");
       if (name === value) value = "";
       const skip =
         // The title is in the header line.

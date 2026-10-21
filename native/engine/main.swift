@@ -35,6 +35,8 @@ func keyNamed(_ name: String) -> FBAXKeys? {
   case "type": return .type; case "title": return .title; case "frameDict": return .frameDict; case "help": return .help
   case "enabled": return .enabled; case "customActions": return .customActions; case "role": return .role
   case "roleDescription": return .roleDescription; case "subrole": return .subrole; case "contentRequired": return .contentRequired; case "pid": return .pid
+  case "traits": return .traits; case "expanded": return .expanded; case "placeholder": return .placeholder; case "hidden": return .hidden
+  case "focused": return .focused; case "isRemote": return .isRemote
   default: return nil
   }
 }
@@ -47,6 +49,25 @@ func cpuMs() -> Int {
 /** The last tree any read returned, to tell a screen that moved but did not change yet (an app still opening). */
 var lastTreeSignature = 0
 var lastFrontPid = -1
+/**
+ * Content drawn by another process (a web page: Safari's or an app's WKWebView) is not in the frontmost app's tree.
+ * With readRemote set, FBSimulatorControl hit-tests the screen on a grid where no native element lies and adds what
+ * it finds there (its remote-content phase); readProfile asks it for counts and timings. lastReadReport holds what the
+ * last read reported (coverage, profile), for the answer.
+ */
+var readRemote: FBAccessibilityRemoteContentOptions? = nil
+var readProfile = false
+var lastReadReport: [String: Any] = [:]
+/**
+ * A web page (an app's WKWebView, Safari) is drawn by its own web process: the app's tree holds only an empty
+ * scroll area there, and FBSimulatorControl's remote-content phase skips it (the area's own frame counts as covered).
+ * Point reads inside it do answer with the page's elements, so a read with an empty web area sweeps it point by point
+ * (webScan below), within webBudget seconds, and reuses the result while the screen's pixels are unchanged.
+ */
+var webScanOn = true
+var webBudget: TimeInterval = 2.5
+var screenWatcher: DamageWatcher? = nil
+var lastWebScan: (seed: UInt32, region: CGRect, elements: [[String: Any]])? = nil
 /** How long each accessibility read of the last readFrontmost took, in ms (the describe answer carries it). */
 var lastSerializeMs: [Int] = []
 /** What the screen shows, not how it is drawn: kinds, labels and ids (a pressed icon or a moving frame is the same screen). */
@@ -100,6 +121,10 @@ final class DamageWatcher: NSObject, FBFramebufferConsumer, @unchecked Sendable 
     let seed = IOSurfaceGetSeed(unsafeBitCast(surface, to: IOSurfaceRef.self))
     if seed != lastSeed { lastSeed = seed; lastUpdate = Date(); updates += 1 } }
   func snapshot() -> (Date, Int) { lock.lock(); defer { lock.unlock() }; return (lastUpdate, updates) }
+  /** The surface's seed now: equal seeds, unchanged pixels (damage callbacks also come without a change). */
+  func currentSeed() -> UInt32? { lock.lock(); defer { lock.unlock() }
+    guard let surface else { return nil }
+    return IOSurfaceGetSeed(unsafeBitCast(surface, to: IOSurfaceRef.self)) }
 }
 /** Waits until the screen has not changed for quietMs (or timeoutMs passes); returns waited ms, updates seen and whether it settled. */
 func settle(_ watcher: DamageWatcher, quietMs: Double, timeoutMs: Double, firstChangeMs: Double = 0) async -> (Int, Int, Bool) {
@@ -226,17 +251,138 @@ func nodeCount(_ tree: Any) -> Int {
   guard let n = tree as? [String: Any] else { return 0 }
   return 1 + ((n["children"] as? [Any]).map(nodeCount) ?? 0)
 }
+/** An element's frame: FBSimulatorControl's "frame" dictionary, or its "AXFrame" string. */
+func frameOf(_ node: [String: Any]) -> CGRect? {
+  if let f = node["frame"] as? [String: Any], let x = f["x"] as? Double, let y = f["y"] as? Double, let w = f["width"] as? Double, let h = f["height"] as? Double {
+    return CGRect(x: x, y: y, width: w, height: h)
+  }
+  if let text = node["AXFrame"] as? String { return NSRectFromString(text) }
+  return nil
+}
+/** Some text in the element or under it, scroll bars aside. */
+func hasText(_ node: [String: Any]) -> Bool {
+  if (node["role"] as? String) == "AXSlider" { return false }
+  for key in ["AXLabel", "AXValue"] {
+    if let text = node[key] as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+  }
+  return ((node["children"] as? [[String: Any]]) ?? []).contains(where: hasText)
+}
+/** A web view's empty area: a scroll or web area of 15% of the screen or more with no text under it. */
+func isEmptyWebArea(_ node: [String: Any], screen: CGRect) -> CGRect? {
+  guard let role = node["role"] as? String, role == "AXScrollArea" || role == "AXWebArea", let frame = frameOf(node)?.intersection(screen),
+        !frame.isNull, frame.width * frame.height >= screen.width * screen.height * 0.15, !hasText(node) else { return nil }
+  return frame
+}
+/**
+ * The page's elements in one area, read point by point: five columns swept from the top, each point's element kept
+ * and jumped past, points inside an element already found skipped. Elements as big as half the area (the page's
+ * own containers) say nothing and are passed in 20-point steps (a line of text is at least 20 points tall).
+ */
+@MainActor
+func webScan(_ simulator: FBSimulator, region: CGRect, deadline: Date, appPid: Int) async -> (elements: [[String: Any]], reads: Int, complete: Bool) {
+  var found: [[String: Any]] = [], seen = Set<String>(), covered: [CGRect] = [], reads = 0
+  let area = region.width * region.height
+  func ordered() -> [[String: Any]] {
+    found.sorted { a, b in
+      let fa = frameOf(a) ?? .zero, fb = frameOf(b) ?? .zero
+      return fa.minY != fb.minY ? fa.minY < fb.minY : fa.minX < fb.minX
+    }
+  }
+  for share in [0.1, 0.5, 0.9, 0.3, 0.7] as [CGFloat] {
+    let x = region.minX + region.width * share
+    var y = region.minY + 4
+    while y < region.maxY - 2 {
+      if Date() > deadline || reads >= 400 { return (ordered(), reads, false) }
+      if let inside = covered.first(where: { $0.minX <= x && x <= $0.maxX && $0.minY <= y && y <= $0.maxY }) { y = inside.maxY + 1; continue }
+      reads += 1
+      var hit: [String: Any]? = nil
+      if let element = try? await simulator.accessibilityElement(at: CGPoint(x: x, y: y)) {
+        hit = (try? element.serialize(with: FBAccessibilityRequestOptions(nestedFormat: false, keys: outputKeys)).elements).map(withDefaults) as? [String: Any]
+        element.close()
+      }
+      guard let node = hit, let frame = frameOf(node), frame.width > 0, frame.height > 0, frame.width * frame.height < area * 0.5 else { y += 20; continue }
+      // The app's own elements over the page (a keyboard's bar, a toolbar) are in its tree already: jump past them.
+      let fromApp = (node["pid"] as? Int) == appPid
+      let key = "\(node["role"] ?? "")|\(node["AXLabel"] ?? "")|\(node["AXValue"] ?? "")|\(Int(frame.minX)),\(Int(frame.minY)),\(Int(frame.width)),\(Int(frame.height))"
+      if !fromApp && seen.insert(key).inserted {
+        var element = node
+        element["found_by"] = "point_scan"
+        if element["children"] == nil { element["children"] = [Any]() }
+        found.append(element)
+      }
+      covered.append(frame)
+      y = max(y + 4, frame.maxY + 1)
+    }
+  }
+  return (ordered(), reads, true)
+}
+/** The tree with each empty web area filled from webScan (or from the last scan, while the screen is unchanged). */
+@MainActor
+func withWebContent(_ simulator: FBSimulator, _ tree: Any) async -> Any {
+  guard var roots = tree as? [[String: Any]], let screen = roots.first.flatMap(frameOf), screen.width > 0 else { return tree }
+  let start = Date(), deadline = start.addingTimeInterval(webBudget), seedBefore = screenWatcher?.currentSeed()
+  let appPid = (roots.first?["pid"] as? Int) ?? -1
+  var areas = 0, reads = 0, complete = true, cached = false, count = 0
+  func fill(_ node: [String: Any]) async -> [String: Any] {
+    if let region = isEmptyWebArea(node, screen: screen) {
+      areas += 1
+      let seed = screenWatcher?.currentSeed()
+      var elements: [[String: Any]]
+      if let last = lastWebScan, let seed, last.seed == seed, last.region == region {
+        elements = last.elements; cached = true
+      } else {
+        let scan = await webScan(simulator, region: region, deadline: deadline, appPid: appPid)
+        elements = scan.elements; reads += scan.reads; complete = complete && scan.complete
+        // Only a whole scan of pixels that did not change while it ran is kept for the next read.
+        if let seed, scan.complete, screenWatcher?.currentSeed() == seed { lastWebScan = (seed, region, elements) } else { lastWebScan = nil }
+      }
+      count += elements.count
+      var filled = node
+      filled["children"] = ((node["children"] as? [Any]) ?? []) + elements
+      return filled
+    }
+    guard let children = node["children"] as? [[String: Any]], !children.isEmpty else { return node }
+    var filled = node, out: [[String: Any]] = []
+    for child in children { out.append(await fill(child)) }
+    filled["children"] = out
+    return filled
+  }
+  for i in roots.indices { roots[i] = await fill(roots[i]) }
+  if areas > 0 {
+    lastReadReport["web_scan"] = ["areas": areas, "reads": reads, "elements": count, "complete": complete, "cached": cached, "ms": ms(start),
+      "seed_before": seedBefore.map { Int($0) } ?? -1, "seed_after": screenWatcher?.currentSeed().map { Int($0) } ?? -1]
+  }
+  return roots
+}
+/** One accessibility read of the frontmost app, with the options above; its time goes to lastSerializeMs. */
+@MainActor
+func serializeFrontmost(_ simulator: FBSimulator, keys: Set<FBAXKeys>, nested: Bool) async throws -> Any {
+  let start = Date()
+  let element = try await simulator.accessibilityElementForFrontmostApplication()
+  defer { element.close() }
+  let response = try element.serialize(with: FBAccessibilityRequestOptions(nestedFormat: nested, keys: keys, enableProfiling: readProfile,
+    collectFrameCoverage: readRemote != nil, remoteContentOptions: readRemote))
+  lastSerializeMs.append(ms(start))
+  if let coverage = response.frameCoverage { lastReadReport["frame_coverage"] = coverage }
+  if let added = response.additionalFrameCoverage { lastReadReport["remote_coverage"] = added }
+  if let profile = response.profilingData { lastReadReport["profile"] = profile.asDictionary() }
+  return withDefaults(response.elements)
+}
+/** remote: true, or {step, max_points, region: [x, y, width, height]} in points. */
+func remoteOptions(_ value: Any?) -> FBAccessibilityRemoteContentOptions? {
+  if let on = value as? Bool { return on ? FBAccessibilityRemoteContentOptions() : nil }
+  guard let o = value as? [String: Any] else { return nil }
+  var region = CGRect.null
+  if let r = o["region"] as? [Double], r.count == 4 { region = CGRect(x: r[0], y: r[1], width: r[2], height: r[3]) }
+  return FBAccessibilityRemoteContentOptions(gridStepSize: CGFloat(o["step"] as? Double ?? 50), region: region, maxPoints: UInt(o["max_points"] as? Int ?? 0))
+}
 @MainActor
 func readFrontmost(_ simulator: FBSimulator, keys: Set<FBAXKeys>, nested: Bool = true) async throws -> Any {
   var reloaded = false
   lastSerializeMs = []
   for attempt in 0..<2 {
     do {
-      let readStart = Date()
-      let element = try await simulator.accessibilityElementForFrontmostApplication()
-      var tree = withDefaults(try element.serialize(with: FBAccessibilityRequestOptions(nestedFormat: nested, keys: keys)).elements)
-      element.close()
-      lastSerializeMs.append(ms(readStart))
+      var tree = try await serializeFrontmost(simulator, keys: keys, nested: nested)
       if attempt == 0 && isEmptyApp(tree) { forceBootstrap = true; reloaded = true; continue }
       // A different app in front (one opened or closed) fills in its elements over a moment: read again until two
       // reads agree, up to 2 s. Within one app a single read is enough.
@@ -245,11 +391,7 @@ func readFrontmost(_ simulator: FBSimulator, keys: Set<FBAXKeys>, nested: Bool =
         let start = Date()
         while Date().timeIntervalSince(start) < 2 {
           try? await Task.sleep(nanoseconds: 250_000_000)
-          let againStart = Date()
-          let again = try await simulator.accessibilityElementForFrontmostApplication()
-          let next = withDefaults(try again.serialize(with: FBAccessibilityRequestOptions(nestedFormat: nested, keys: keys)).elements)
-          again.close()
-          lastSerializeMs.append(ms(againStart))
+          let next = try await serializeFrontmost(simulator, keys: keys, nested: nested)
           let same = signature(next) == signature(tree)
           tree = next
           // Two equal reads of a nearly empty app are its shell before the content: not settled yet.
@@ -257,6 +399,7 @@ func readFrontmost(_ simulator: FBSimulator, keys: Set<FBAXKeys>, nested: Bool =
         }
       }
       lastFrontPid = ((tree as? [[String: Any]])?.first?["pid"] as? Int) ?? -1
+      if webScanOn { tree = await withWebContent(simulator, tree) }
       lastTreeSignature = signature(tree)
       return tree
     } catch {
@@ -279,6 +422,7 @@ func main() async {
     let hidStart = Date()
     let hid = try await simulator.connectToHID()
     let watcher = DamageWatcher()
+    screenWatcher = watcher
     let fbStart = Date()
     let framebuffer: FBFramebuffer? = try? await withCheckedThrowingContinuation { (cont: CheckedContinuation<FBFramebuffer, Error>) in
       DispatchQueue.global().async { do { cont.resume(returning: try simulator.connectToFramebuffer().block()) } catch { cont.resume(throwing: error) } }
@@ -305,18 +449,23 @@ func main() async {
           if let names = req["keys"] as? [String] {
             // An unknown name would silently drop that attribute from every element (AXLabel for label read as no text).
             let unknown = names.filter { keyNamed($0) == nil }
-            if !unknown.isEmpty { throw EngineError(message: "unknown keys \(unknown.joined(separator: ", ")); the names are label, frame, value, uniqueID, type, title, frameDict, help, enabled, customActions, role, roleDescription, subrole, contentRequired, pid") }
+            if !unknown.isEmpty { throw EngineError(message: "unknown keys \(unknown.joined(separator: ", ")); the names are label, frame, value, uniqueID, type, title, frameDict, help, enabled, customActions, role, roleDescription, subrole, contentRequired, pid, traits, expanded, placeholder, hidden, focused, isRemote") }
             keys = Set(names.compactMap(keyNamed))
           }
+          readRemote = remoteOptions(req["remote"]); readProfile = (req["profile"] as? Bool) ?? false; lastReadReport = [:]
+          webScanOn = (req["web"] as? Bool) ?? true; webBudget = (req["web_budget_ms"] as? Double).map { $0 / 1000 } ?? 2.5
+          defer { readRemote = nil; readProfile = false; webScanOn = true; webBudget = 2.5 }
           answer["tree"] = try await readFrontmost(simulator, keys: keys, nested: (req["nested"] as? Bool) ?? true)
           answer["cpu_ms"] = cpuMs(); answer["serialize_ms"] = lastSerializeMs
+          for (key, value) in lastReadReport { answer[key] = value }
         case "point":
           let x = req["x"] as? Double ?? 0, y = req["y"] as? Double ?? 0
           for attempt in 0..<2 {
             do {
               let element = try await simulator.accessibilityElement(at: CGPoint(x: x, y: y))
               defer { element.close() }
-              answer["element"] = withDefaults(try element.serialize(with: FBAccessibilityRequestOptions(nestedFormat: false, keys: outputKeys)).elements)
+              // nested: the element with everything under it (a hit on a web page's background is the page).
+              answer["element"] = withDefaults(try element.serialize(with: FBAccessibilityRequestOptions(nestedFormat: (req["nested"] as? Bool) ?? false, keys: outputKeys)).elements)
               break
             } catch {
               if attempt == 0 && String(describing: error).contains("No translation object") { forceBootstrap = true; continue }
@@ -369,6 +518,7 @@ func main() async {
         case "tap_settle_describe":
           // One call for an act: the tap, the wait until the screen stops changing, then the new tree.
           let x = req["x"] as? Double ?? 0, y = req["y"] as? Double ?? 0
+          lastReadReport = [:]
           try await hid.send(event: .tapAt(x: x, y: y), logger: logger)
           let (waited, updates, settled) = await settle(watcher, quietMs: req["quiet_ms"] as? Double ?? 150, timeoutMs: req["timeout_ms"] as? Double ?? 4000, firstChangeMs: req["first_change_ms"] as? Double ?? 800)
           let readStart = Date()
@@ -383,6 +533,7 @@ func main() async {
             _ = await settle(watcher, quietMs: 150, timeoutMs: 1000, firstChangeMs: 0)
           }
           answer["tree"] = tree; answer["settle_ms"] = waited; answer["updates"] = updates; answer["settled"] = settled; answer["read_ms"] = ms(readStart); answer["reads"] = reads
+          if let scan = lastReadReport["web_scan"] { answer["web_scan"] = scan }
         case "tap_trace":
           // When the screen changes after a tap: one timestamp (ms after the tap) per surface change.
           let x = req["x"] as? Double ?? 0, y = req["y"] as? Double ?? 0, windowMs = req["window_ms"] as? Double ?? 3000

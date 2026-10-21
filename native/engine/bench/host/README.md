@@ -20,3 +20,8 @@ end, the account volume, builds, installs); each `*-body.sh` is appended to it (
 - `webread-body.sh` with `webread.py`: reading a web page (whole-screen and point reads, AXe for comparison).
 - `pboard-body.sh`, `pbset-body.sh` with `paste.py`, `su-paste-body.sh`: the clipboard without a screen session.
 - `ipad-body.sh` with `ipad.py`; `manifest.py`: a sync manifest's cost.
+- Web content: `webtest/` (a hybrid-style test app: a native header above a WKWebView sign-in page; build with
+  `xcrun -sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=17.0 -fobjc-arc main.m -framework UIKit
+  -framework WebKit`), `webexp.py` (FBSimulatorControl's remote-content phase: finds nothing), `webpoint.py`,
+  `webtree.py`, `webscan.py` (the scan prototyped over point reads), `webeng.py` and `seeds.py` (the engine's scan
+  and its cache), `webfill.py` (each request of a fill, timed), `webmcp.py` (simulator-use's MCP tools on the page).

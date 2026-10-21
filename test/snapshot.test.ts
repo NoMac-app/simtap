@@ -202,3 +202,29 @@ test("iOS 27 Settings: a large title in its own part before the list is not a sh
   assert.match(out, /button "General" #com\.apple\.settings\.general @201,406/);
   assert.match(out, /textfield "Search" @201,822/);
 });
+
+// The engine's own read of a WKWebView sign-in page (native/engine's web scan, iOS 27, the M6, October 21): the
+// page's elements come from point reads, its texts with their words in the value. All of it is listed, nothing
+// is "unreadable".
+test("a web page read by the engine: headings, texts, fields and links, beside the app's own header", () => {
+  const out = render(snapshot(fixture("web-scanned")), { device: "iPhone 17 Pro (iOS 27.0)" });
+  assert.equal(
+    out.split("\n").slice(0, 12).join("\n"),
+    [
+      "WebTest · iPhone 17 Pro (iOS 27.0)",
+      'text "Native header" @126,75',
+      'button "Native button" @320,75',
+      'heading "Sign in" @70,144',
+      'text "Welcome back to the demo shop." @144,199',
+      'text "Email" @37,238',
+      'textfield "Email" ="you@example.com" @192,277',
+      'text "Password" @53,316',
+      'securefield "Password" @192,355',
+      'text "Remember me" @91,400',
+      'button "Continue" @183,444',
+      'link "Forgot password?" @84,483',
+    ].join("\n"),
+  );
+  assert.match(out, /^text "• Item 11" @73,865$/m);
+  assert.doesNotMatch(out, /unreadable/);
+});

@@ -31,11 +31,13 @@ export class AccessibilityStarting extends ToolError {}
 const STARTING = /remote automation session|No translation object returned/i;
 
 export async function describeUi(udid: string): Promise<AxNode[]> {
-  const answer = await engineCall(udid, { op: "describe" });
+  // A web page's first read can take half a minute (Safari, iOS 27): the engine gets a minute.
+  const answer = await engineCall(udid, { op: "describe" }, 60_000);
   if (answer?.ok) {
     const tree = answer.tree as AxNode | AxNode[];
     return Array.isArray(tree) ? tree : [tree];
   }
+  if (answer?.busy) throw new ToolError("Reading the screen took more than a minute.", "Call ui_look again: the phone is still working on the last read.");
   if (answer && STARTING.test(answer.error ?? "")) {
     throw new AccessibilityStarting("The Simulator's accessibility service is still starting; after a first boot this can take a minute or two.", "Call again in 30 seconds.");
   }
@@ -57,6 +59,7 @@ export async function screenshot(udid: string, points: Frame): Promise<Buffer> {
   const sized = points.width > 0 && points.height > 0 ? { width: Math.round(points.width), height: Math.round(points.height) } : {};
   const answer = await engineCall(udid, { op: "screenshot", ...sized, quality: 0.7, inline: true });
   if (answer?.ok && typeof answer.jpeg_base64 === "string") return Buffer.from(answer.jpeg_base64, "base64");
+  if (answer?.busy) throw new ToolError("The screenshot took more than 30 s.", "Take it again: the phone is still working on an earlier request.");
   const dir = await mkdtemp(join(tmpdir(), "simulator-use-"));
   try {
     const png = join(dir, "screen.png");
@@ -80,6 +83,7 @@ export async function batch(udid: string, steps: string[]): Promise<void> {
   if (native) {
     const answer = await engineCall(udid, { op: "steps", steps: native }, 60_000);
     if (answer?.ok) return;
+    if (answer?.busy) throw new ToolError("The Simulator did not take the input within a minute.");
   }
   try {
     await axe(udid, ["batch", "--ax-cache", "none", "--type-submission", "composite", ...steps.flatMap((s) => ["--step", s])], 60_000);
@@ -94,6 +98,7 @@ export async function gesture(udid: string, args: string[]): Promise<void> {
   if (native) {
     const answer = await engineCall(udid, native, 30_000);
     if (answer?.ok) return;
+    if (answer?.busy) throw new ToolError("The Simulator did not take the gesture within 30 s.");
   }
   try {
     await axe(udid, args, 30_000);
@@ -109,6 +114,8 @@ export async function elementAt(udid: string, x: number, y: number): Promise<AxN
     const element = answer.element as AxNode | AxNode[] | undefined;
     return Array.isArray(element) ? element[0] : element;
   }
+  // Slow (a web field just focused answered in 4.2 s): the caller reads the whole screen instead.
+  if (answer?.busy) return undefined;
   try {
     // Normally 0.15 s; on a fresh Xcode 27 VM some hung for 8 to 11 s, so a slow one is abandoned for a full read.
     const { stdout } = await axe(udid, ["describe-ui", "--point", `${Math.round(x)},${Math.round(y)}`], 3_000);
@@ -127,6 +134,7 @@ export function typeStep(text: string): string {
 export async function pressButton(udid: string, button: "home" | "lock"): Promise<void> {
   const answer = await engineCall(udid, { op: button, wait: false });
   if (answer?.ok) return;
+  if (answer?.busy) throw new ToolError(`The ${button} button press was not answered within 30 s.`);
   await axe(udid, ["button", button]);
 }
 

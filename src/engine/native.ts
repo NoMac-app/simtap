@@ -20,9 +20,15 @@ export function enginePath(): string | undefined {
   return existsSync(bundled) ? bundled : undefined;
 }
 
-export type Answer = Record<string, unknown> & { ok?: boolean; error?: string };
+export type Answer = Record<string, unknown> & { ok?: boolean; error?: string; busy?: boolean };
 
 const START_MS = 15_000;
+/**
+ * An engine that answers nothing for this long is hung, and is ended. A request merely slower than its caller's
+ * wait never ends it: a new engine on a phone booted minutes ago cannot open an automation session (measured), so
+ * ending a slow one left the phone unreadable (a web field's first read took 4.2 s against a 3 s wait).
+ */
+const HUNG_MS = 120_000;
 
 class Engine {
   private readonly child: ChildProcess;
@@ -62,20 +68,29 @@ class Engine {
     }
   }
 
-  /** One request at a time, in order; a request that outlives its time ends the engine (the caller falls back). */
+  /**
+   * One request at a time, in order. A caller waits timeoutMs and then gets a busy answer, while the engine
+   * finishes: the next request still waits for this one's answer, which is read and dropped, so answers stay paired
+   * with their requests and the engine stays.
+   */
   call(request: Record<string, unknown>, timeoutMs: number): Promise<Answer> {
-    const result = this.queue.then(async () => {
+    const answer = this.queue.then(async () => {
       if (this.dead) throw new Error("the engine stopped");
       this.child.stdin!.write(`${JSON.stringify(request)}\n`);
       try {
-        return parse(await this.next(timeoutMs)) ?? { ok: false, error: "unreadable answer" };
+        return parse(await this.next(HUNG_MS)) ?? { ok: false, error: "unreadable answer" };
       } catch (error) {
         this.kill();
         throw error;
       }
     });
-    this.queue = result.catch(() => undefined);
-    return result;
+    this.queue = answer.catch(() => undefined);
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<Answer>((resolve) => {
+      timer = setTimeout(() => resolve({ ok: false, busy: true, error: `no answer within ${timeoutMs} ms` }), timeoutMs);
+      timer.unref();
+    });
+    return Promise.race([answer, late]).finally(() => clearTimeout(timer));
   }
 
   kill(): void {
@@ -111,7 +126,11 @@ async function engineFor(udid: string): Promise<Engine | undefined> {
   return undefined;
 }
 
-/** A request to the phone's engine, or undefined when there is none (the caller uses AXe). */
+/**
+ * A request to the phone's engine, or undefined when there is none (the caller uses AXe). An answer with busy set
+ * means the engine is still working on it: the caller goes on without it, never with AXe, whose own automation
+ * session would compete with the engine's.
+ */
 export async function engineCall(udid: string, request: Record<string, unknown>, timeoutMs = 30_000): Promise<Answer | undefined> {
   const engine = await engineFor(udid);
   if (!engine) return undefined;

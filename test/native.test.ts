@@ -29,3 +29,18 @@ test("swipes and drags become engine gestures; anything else stays with AXe", ()
   assert.equal(engineGesture(["slider", "--id", "x"]), undefined);
   assert.equal(engineGesture(["swipe", "--start-x", "1"]), undefined);
 });
+
+test("a slow request gets a busy answer, the engine stays, and the next request gets its own answer", async () => {
+  const { closeEngines, engineCall } = await import("../src/engine/native.ts");
+  process.env.SIMULATOR_USE_ENGINE = new URL("fixtures/fake-engine.mjs", import.meta.url).pathname;
+  try {
+    const slow = await engineCall("FAKE-PHONE", { op: "x", n: 1, delay_ms: 400 }, 100);
+    assert.equal(slow?.busy, true);
+    const next = await engineCall("FAKE-PHONE", { op: "x", n: 2 }, 2_000);
+    assert.equal(next?.ok, true);
+    assert.equal(next?.echo, 2);
+  } finally {
+    closeEngines();
+    delete process.env.SIMULATOR_USE_ENGINE;
+  }
+});
