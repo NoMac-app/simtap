@@ -1,0 +1,48 @@
+<!doctype html><meta charset="utf-8"><title>Live view</title>
+<style>body{margin:0;background:#111;color:#ddd;font:13px system-ui}canvas{display:block;margin:8px auto;max-height:90vh;cursor:pointer}#s{text-align:center}</style>
+<div id="s">connecting</div><canvas id="c"></canvas>
+<script>
+// Decodes the relay's H.264 access units with WebCodecs, draws them, and measures input-to-pixels latency: for each
+// request sent with probe=true, the time until a decoded frame differs from the frame on screen when it was sent.
+const c = document.getElementById("c"), g = c.getContext("2d", { willReadFrequently: true }), s = document.getElementById("s");
+const PT_W = 402, PT_H = 874;
+const st = window.stats = { frames: 0, bytes: 0, keys: 0, decodeErrors: 0, probes: [], rtts: [], started: performance.now() };
+let ws, dec, nextId = 1, waiting = new Map(), probe = null;
+function sig() { // a cheap signature of the picture: 16x16 samples
+  const w = c.width, h = c.height; if (!w) return "";
+  const d = g.getImageData(0, 0, w, h).data; let out = [];
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) { const i = ((Math.floor((y + 0.5) * h / 16) * w) + Math.floor((x + 0.5) * w / 16)) * 4; out.push(d[i] >> 3, d[i + 1] >> 3, d[i + 2] >> 3); }
+  return out.join(",");
+}
+function frame(f) {
+  if (c.width !== f.displayWidth) { c.width = f.displayWidth; c.height = f.displayHeight; }
+  g.drawImage(f, 0, 0); f.close(); st.frames++;
+  if (probe && sig() !== probe.sig) { st.probes.push(performance.now() - probe.t0); probe.done(); probe = null; }
+}
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`); ws.binaryType = "arraybuffer";
+  ws.onmessage = (e) => {
+    if (typeof e.data === "string") {
+      const m = JSON.parse(e.data);
+      if (m.codec) {
+        dec = new VideoDecoder({ output: frame, error: (er) => { st.decodeErrors++; s.textContent = "decode error " + er; } });
+        dec.configure({ codec: m.codec, optimizeForLatency: true }); s.textContent = "codec " + m.codec; return;
+      }
+      if (m.reply) { const w = waiting.get(m.reply); waiting.delete(m.reply); if (w) w(m); }
+      return;
+    }
+    const b = new Uint8Array(e.data); st.bytes += b.length; if (!dec || dec.state !== "configured") return;
+    if (b[0]) st.keys++;
+    try { dec.decode(new EncodedVideoChunk({ type: b[0] ? "key" : "delta", timestamp: performance.now() * 1000, data: b.subarray(1) })); } catch (er) { st.decodeErrors++; }
+  };
+}
+window.send = (req, isProbe) => new Promise((resolve) => {
+  const id = nextId++, t0 = performance.now();
+  waiting.set(id, (m) => { st.rtts.push({ total: performance.now() - t0, relay: m.relay_ms, engine: m.engine_ms }); if (!isProbe) resolve(m); });
+  if (isProbe) probe = { t0, sig: sig(), done: () => resolve(performance.now() - t0) };
+  ws.send(JSON.stringify({ id, req }));
+});
+c.onclick = (e) => { const r = c.getBoundingClientRect(); window.send({ op: "tap", x: (e.clientX - r.left) / r.width * PT_W, y: (e.clientY - r.top) / r.height * PT_H }, true); };
+setInterval(() => { const sec = (performance.now() - st.started) / 1000; s.textContent = `${st.frames} frames, ${(st.bytes * 8 / 1000 / sec).toFixed(0)} kbit/s, last probe ${st.probes.length ? st.probes[st.probes.length - 1].toFixed(0) + " ms" : "-"}`; }, 1000);
+connect();
+</script>
