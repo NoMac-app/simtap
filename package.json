@@ -16,6 +16,10 @@
     "simulator-use": "bin/simulator-use.js",
     "simtap": "bin/simulator-use.js"
   },
+  "exports": {
+    "./tools.json": "./dist/tools.json",
+    "./package.json": "./package.json"
+  },
   "files": [
     "bin",
     "dist",
@@ -24,7 +28,7 @@
     "THIRD_PARTY_LICENSES"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && node scripts/tools-json.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test 'test/**/*.test.ts'",
     "axe": "node scripts/fetch-axe.mjs",

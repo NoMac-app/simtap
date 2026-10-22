@@ -135,3 +135,13 @@ test("a hosted server takes the account's build cache at hand-over; a local one 
     }
   }
 });
+
+test("the built tools.json lists the tools exactly as the MCP server does", async () => {
+  const { existsSync, readFileSync } = await import("node:fs");
+  const file = new URL("../dist/tools.json", import.meta.url);
+  if (!existsSync(file)) return; // written by npm run build
+  const json = JSON.parse(readFileSync(file, "utf8"));
+  const listed = ((await request("tools/list"))?.result as { tools: unknown[] }).tools;
+  assert.deepEqual(json.tools, JSON.parse(JSON.stringify(listed)));
+  assert.equal(json.instructions, INSTRUCTIONS);
+});
