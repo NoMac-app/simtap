@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createWriteStream, existsSync, readdirSync, realpathSync } from "node:fs";
+import { createWriteStream, existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 
@@ -36,11 +36,38 @@ export async function findProject(where: string): Promise<Project> {
     if (made) return { kind: "project", path: join(path, made), name: basename(made, ".xcodeproj"), dir: path, generated: !project, note };
   }
   if (project) return { kind: "project", path: join(path, project), name: basename(project, ".xcodeproj"), dir: path };
-  if (entries.includes("app.json") || entries.includes("pubspec.yaml") || entries.some((e) => e.startsWith("capacitor.config"))) {
-    throw new ToolError("Expo, React Native, Flutter and Capacitor projects are not built by app_run yet; Xcode projects are.", "Build it with its own tool for the iOS Simulator, then app_control {action: \"install\", app: \"path/to/App.app\"}.");
+  const ios = join(path, "ios");
+  const hasIos = entries.includes("ios") && existsSync(ios);
+  if (entries.includes("pubspec.yaml")) {
+    throw new ToolError("A Flutter project: Flutter builds it, not app_run.", "Run flutter build ios --simulator, then app_control {action: \"install\", app: \"build/ios/iphonesimulator/Runner.app\"}.");
   }
-  if (entries.includes("ios") && existsSync(join(path, "ios"))) return findProject(join(path, "ios"));
+  if (entries.some((e) => e.startsWith("capacitor.config"))) {
+    throw new ToolError("A Capacitor project: its web build is copied into the iOS project first.", `Run npx cap sync ios, then app_run {path: "${join(path, "ios", "App")}"}.`);
+  }
+  if (entries.includes("app.json")) {
+    const expo = isExpo(join(path, "app.json"));
+    if (!hasIos) {
+      throw new ToolError(expo ? "An Expo project with no ios/ folder yet." : "A React Native project with no ios/ folder.",
+        expo ? "Run npx expo prebuild --platform ios to make one, then app_run again; or open the project in Expo Go." : "app_run builds the Xcode project in ios/.");
+    }
+    if (!readdirSync(ios).some((e) => e.endsWith(".xcworkspace")) && existsSync(join(ios, "Podfile"))) {
+      throw new ToolError("ios/ has a Podfile but no workspace yet.", `Run pod install in ${ios}, then app_run again.`);
+    }
+    const found = await findProject(ios);
+    // A Debug build loads its JavaScript from Metro; Release puts it in the app.
+    return { ...found, note: [found.note, "A React Native app: a Debug build loads its JavaScript from Metro (start it first: npx react-native start, or npx expo start), and configuration Release puts it in the app."].filter(Boolean).join(" ") };
+  }
+  if (hasIos) return findProject(ios);
   throw new ToolError(`No Xcode project in ${path}.`, "Pass path: the folder with the .xcodeproj or .xcworkspace.");
+}
+
+/** An app.json with an "expo" key is Expo's; a React Native CLI project's has only its name. */
+function isExpo(file: string): boolean {
+  try {
+    return "expo" in (JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>);
+  } catch {
+    return false;
+  }
 }
 
 /**

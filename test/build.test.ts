@@ -33,7 +33,7 @@ test("issues read relative to the project, absolute outside it", () => {
   assert.equal(formatIssue({ severity: "error", message: "no file" }, "/x"), "error: no file");
 });
 
-test("finding the project: workspace first, then project, then ios/, and a clear word for other kinds", async () => {
+test("finding the project: workspace first, then project, then ios/ (React Native too), and the next step for other kinds", async () => {
   const root = mkdtempSync(join(tmpdir(), "dl-find-"));
   const both = join(root, "both");
   mkdirSync(join(both, "App.xcworkspace"), { recursive: true });
@@ -45,8 +45,28 @@ test("finding the project: workspace first, then project, then ios/, and a clear
   assert.equal((await findProject(rn)).name, "MyApp");
   const expo = join(root, "expo");
   mkdirSync(expo);
-  writeFileSync(join(expo, "app.json"), "{}");
-  await assert.rejects(findProject(expo), (e: unknown) => e instanceof ToolError && /Expo, React Native, Flutter and Capacitor projects are not built by app_run yet/.test(e.message));
+  writeFileSync(join(expo, "app.json"), '{"expo": {"name": "x"}}');
+  await assert.rejects(findProject(expo), (e: unknown) => e instanceof ToolError && /An Expo project with no ios\/ folder yet/.test(e.message) && /expo prebuild/.test(e.next ?? ""));
+  // A React Native CLI project has an app.json too: its ios/ workspace is built, with a word about Metro.
+  const rnCli = join(root, "rn-cli");
+  mkdirSync(join(rnCli, "ios", "Shop.xcworkspace"), { recursive: true });
+  writeFileSync(join(rnCli, "app.json"), '{"name": "Shop", "displayName": "Shop"}');
+  const shop = await findProject(rnCli);
+  assert.equal(shop.kind, "workspace");
+  assert.match(shop.note ?? "", /Metro/);
+  const pods = join(root, "rn-pods");
+  mkdirSync(join(pods, "ios", "Shop.xcodeproj"), { recursive: true });
+  writeFileSync(join(pods, "ios", "Podfile"), "");
+  writeFileSync(join(pods, "app.json"), '{"name": "Shop"}');
+  await assert.rejects(findProject(pods), (e: unknown) => e instanceof ToolError && /Podfile but no workspace/.test(e.message) && /pod install/.test(e.next ?? ""));
+  const flutter = join(root, "flutter");
+  mkdirSync(flutter);
+  writeFileSync(join(flutter, "pubspec.yaml"), "name: x");
+  await assert.rejects(findProject(flutter), (e: unknown) => e instanceof ToolError && /Flutter/.test(e.message) && /flutter build ios --simulator/.test(e.next ?? ""));
+  const cap = join(root, "cap");
+  mkdirSync(cap);
+  writeFileSync(join(cap, "capacitor.config.ts"), "");
+  await assert.rejects(findProject(cap), (e: unknown) => e instanceof ToolError && /Capacitor/.test(e.message) && /npx cap sync ios/.test(e.next ?? ""));
   await assert.rejects(findProject(join(root, "missing")), /does not exist/);
   const empty = join(root, "empty");
   mkdirSync(empty);
