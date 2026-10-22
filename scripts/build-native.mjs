@@ -1,10 +1,10 @@
 // Builds simulator-use's native parts into vendor/axe, beside AXe's frameworks, and checks them: the engine
-// (native/engine, a persistent Simulator driver; it needs idb's private headers at compile time, IDB_HEADERS) and
-// the clipboard helper (native/pbset, built for the Simulator). Run by prepack after fetch-axe.mjs: a release
-// without the engine would quietly fall back to AXe everywhere, so a missing IDB_HEADERS stops it. Set
-// SIMULATOR_USE_SKIP_NATIVE=1 to pack without them (a local tarball for testing AXe alone).
+// (native/engine, a persistent Simulator driver) and the clipboard helper (native/pbset, built for the Simulator).
+// Run by prepack after fetch-axe.mjs, on a Mac with Xcode: a release without the engine would quietly fall back to
+// AXe everywhere, so a failed build stops the pack. SIMULATOR_USE_SKIP_NATIVE=1 packs without them (CI's check of
+// the package, a local tarball for testing AXe alone).
 import { execFileSync } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -15,9 +15,19 @@ if (process.env.SIMULATOR_USE_SKIP_NATIVE === "1") {
   process.exit(0);
 }
 if (!existsSync(join(vendor, "Frameworks", "FBSimulatorControl.framework"))) throw new Error("AXe's frameworks are missing from vendor/axe: run scripts/fetch-axe.mjs first");
-if (!process.env.IDB_HEADERS || !existsSync(process.env.IDB_HEADERS)) {
-  throw new Error("IDB_HEADERS must point at idb's PrivateHeaders (github.com/cameroncooke/idb at the commit AXe pins) to build the engine; SIMULATOR_USE_SKIP_NATIVE=1 packs without it");
+// The engine compiles against idb's private headers (never shipped): those of the idb commit AXe 1.8.0 builds its
+// frameworks from (AXe's scripts/build.sh), fetched once into node_modules/.cache when IDB_HEADERS is not given.
+const IDB_REF = "604c51013438f0c3603b720a05a44b7c5b8f286d";
+if (!process.env.IDB_HEADERS) {
+  const cache = join(root, "node_modules", ".cache", `idb-${IDB_REF.slice(0, 12)}`);
+  if (!existsSync(join(cache, "PrivateHeaders"))) {
+    rmSync(cache, { recursive: true, force: true });
+    execFileSync("git", ["clone", "--quiet", "--filter=blob:none", "--no-checkout", "https://github.com/cameroncooke/idb.git", cache], { stdio: "inherit" });
+    execFileSync("git", ["-C", cache, "checkout", "--quiet", IDB_REF, "--", "PrivateHeaders"], { stdio: "inherit" });
+  }
+  process.env.IDB_HEADERS = join(cache, "PrivateHeaders");
 }
+if (!existsSync(process.env.IDB_HEADERS)) throw new Error(`IDB_HEADERS (${process.env.IDB_HEADERS}) does not exist; SIMULATOR_USE_SKIP_NATIVE=1 packs without the native parts`);
 const sh = (script) => execFileSync("bash", [script], { cwd: root, stdio: "inherit", env: process.env });
 sh(join(root, "native", "engine", "build.sh"));
 execFileSync("mv", [join(root, "native", "engine", "simulator-use-engine"), join(vendor, "simulator-use-engine")]);

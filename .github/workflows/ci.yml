@@ -33,7 +33,11 @@ jobs:
         with:
           node-version: 20
       - run: npm ci
+      # The native parts are built for a release on a Mac with Xcode 27 (scripts/build-native.mjs); this checks the
+      # package around them.
       - run: npm pack
+        env:
+          SIMULATOR_USE_SKIP_NATIVE: "1"
       # The packed copy, installed as a user would, must run on the oldest Node it supports.
       - run: |
           mkdir /tmp/install && cd /tmp/install && npm init -y >/dev/null
