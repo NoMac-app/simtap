@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { NOMAC_URL } from "../src/cloud-hint.ts";
-import { type Device, listDevices, listError, parseDevices, pickDevice, runtimeName } from "../src/engine/simctl.ts";
+import { type Device, findDevice, listDevices, listError, parseDevices, pickDevice, runtimeName } from "../src/engine/simctl.ts";
 import { ToolError } from "../src/errors.ts";
 
 test("runtime identifiers read as people write them", () => {
@@ -112,4 +112,13 @@ test("a slow Simulator service is a wait, not a missing Simulator: no pointer el
   assert.ok(!slow.includes("NoMac") && !slow.includes("can't run"));
   const missing = listError(new Error("xcrun simctl: spawn xcrun ENOENT")).toText();
   assert.match(missing, /can't run the iOS Simulator/);
+});
+
+test("a name with its runtime, as simulator-use prints it, picks that runtime's phone", () => {
+  const phone = (udid: string, runtime: string): Device => ({ udid, name: "iPhone 17 Pro", state: "Shutdown", runtime, booted: false });
+  const list = [phone("NEW", "iOS 27.0"), phone("OLD", "iOS 26.5")];
+  assert.equal(findDevice(list, "iPhone 17 Pro")?.udid, "NEW");
+  assert.equal(findDevice(list, "iPhone 17 Pro (iOS 26.5)")?.udid, "OLD");
+  assert.equal(findDevice(list, "iphone 17 pro (ios 27.0)")?.udid, "NEW");
+  assert.equal(findDevice(list, "iPhone 17 Pro (iOS 25.0)"), undefined);
 });

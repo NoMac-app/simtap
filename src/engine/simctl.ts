@@ -88,7 +88,15 @@ export async function xcodeVersion(): Promise<string | undefined> {
 /** A device by name or UDID; a name on several runtimes means the booted one, else the newest. */
 export function findDevice(devices: Device[], wanted: string): Device | undefined {
   const want = wanted.trim().toLowerCase();
-  const matches = devices.filter((d) => d.udid.toLowerCase() === want || d.name.toLowerCase() === want);
+  // "iPhone 17 Pro (iOS 26.5)", the way simulator-use prints a device, picks that runtime's phone; a bare name
+  // means the newest runtime's.
+  const withRuntime = /^(.+?)\s*\((.+)\)$/.exec(want);
+  const matches = devices.filter(
+    (d) =>
+      d.udid.toLowerCase() === want ||
+      d.name.toLowerCase() === want ||
+      (withRuntime !== null && d.name.toLowerCase() === withRuntime[1] && d.runtime.toLowerCase() === withRuntime[2]),
+  );
   return matches.find((d) => d.booted) ?? matches[0];
 }
 
