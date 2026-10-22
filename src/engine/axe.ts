@@ -77,7 +77,12 @@ export async function screenshot(udid: string, points: Frame): Promise<Buffer> {
   }
 }
 
-const axe = (udid: string, args: string[], timeoutMs = 30_000) => run(axePath(), [...args, "--udid", udid], { timeoutMs });
+/**
+ * Any AXe command may open and close an automation session of its own (a slider is found by its id), so each one is
+ * followed by the time the next engine waits from (noteSessionClosed).
+ */
+const axe = (udid: string, args: string[], timeoutMs = 30_000) =>
+  run(axePath(), [...args, "--udid", udid], { timeoutMs }).finally(() => noteSessionClosed(udid));
 
 /** One AXe process for several input steps (tap, type, key, key-combo, swipe, sleep): about 0.2 s cheaper per step. */
 export async function batch(udid: string, steps: string[]): Promise<void> {
