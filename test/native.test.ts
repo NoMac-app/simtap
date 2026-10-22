@@ -44,3 +44,21 @@ test("a slow request gets a busy answer, the engine stays, and the next request 
     delete process.env.SIMULATOR_USE_ENGINE;
   }
 });
+
+test("a phone whose engine would not start is tried again after a while, not left on AXe", async (t) => {
+  const { closeEngines, engineCall } = await import("../src/engine/native.ts");
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  process.env.SIMULATOR_USE_ENGINE = new URL("fixtures/fake-engine-fails.mjs", import.meta.url).pathname;
+  try {
+    assert.equal(await engineCall("BOOTED-AGAIN", { op: "x", n: 1 }, 2_000), undefined);
+    process.env.SIMULATOR_USE_ENGINE = new URL("fixtures/fake-engine.mjs", import.meta.url).pathname;
+    assert.equal(await engineCall("BOOTED-AGAIN", { op: "x", n: 2 }, 2_000), undefined, "still on AXe right after the failure");
+    t.mock.timers.tick(31_000);
+    const answer = await engineCall("BOOTED-AGAIN", { op: "x", n: 3 }, 2_000);
+    assert.equal(answer?.ok, true);
+    assert.equal(answer?.echo, 3);
+  } finally {
+    closeEngines();
+    delete process.env.SIMULATOR_USE_ENGINE;
+  }
+});

@@ -112,20 +112,30 @@ function parse(line: string): Answer | undefined {
 }
 
 const engines = new Map<string, Engine>();
-/** Phones whose engine would not start: AXe for the rest of this process. */
-const unavailable = new Set<string>();
+/**
+ * Phones whose engine would not start, and when: AXe for a while, then a new engine is tried. A phone that was shut
+ * down (its engine exits, and one started meanwhile fails) gets its engine back once it is booted again, instead of
+ * staying on AXe for the rest of a long-lived MCP server.
+ */
+const unavailable = new Map<string, number>();
+const RETRY_MS = 30_000;
 
 async function engineFor(udid: string): Promise<Engine | undefined> {
   const path = enginePath();
-  if (!path || unavailable.has(udid)) return undefined;
+  if (!path) return undefined;
+  const failedAt = unavailable.get(udid);
+  if (failedAt !== undefined && Date.now() - failedAt < RETRY_MS) return undefined;
   let engine = engines.get(udid);
   if (!engine || engine.dead) {
     engine = new Engine(path, udid);
     engines.set(udid, engine);
   }
-  if (await engine.ready) return engine;
+  if (await engine.ready) {
+    unavailable.delete(udid);
+    return engine;
+  }
   engines.delete(udid);
-  unavailable.add(udid);
+  unavailable.set(udid, Date.now());
   return undefined;
 }
 
