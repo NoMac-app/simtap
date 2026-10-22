@@ -695,7 +695,9 @@ func main() async {
           }
           answer["capture_ms"] = shotMs
         case "stream":
-          // Hardware-encoded video of the screen for N seconds into a file: the live view's source.
+          // Hardware-encoded video of the screen for N seconds into a file, or into a descriptor the parent holds
+          // (fd; the live view's pipe, the engine's stdout once it said ready). seconds 0: until the reader goes or
+          // the engine is ended (a write to a closed pipe ends it).
           let seconds = req["seconds"] as? Double ?? 10, fps = req["fps"] as? Double ?? 30
           let codec: FBVideoStreamCodec = (req["codec"] as? String) == "hevc" ? .hevc : .h264
           let transportName = req["transport"] as? String ?? "annexb"
@@ -703,13 +705,21 @@ func main() async {
           let config = FBVideoStreamConfiguration(format: .compressedVideo(withCodec: codec, transport: transport), framesPerSecond: NSNumber(value: fps),
             rateControl: .bitrate(NSNumber(value: req["bitrate"] as? Double ?? 2_000_000)), scaleFactor: NSNumber(value: req["scale"] as? Double ?? 0.5), keyFrameRate: NSNumber(value: req["keyframe_s"] as? Double ?? 2))
           let stream = try await simulator.createStream(configuration: config)
-          let path = req["path"] as? String ?? "/tmp/sue-stream.bin"
-          FileManager.default.createFile(atPath: path, contents: nil)
-          guard let fh = FileHandle(forWritingAtPath: path) else { throw EngineError(message: "cannot write \(path)") }
+          let fh: FileHandle
+          if let fd = req["fd"] as? Int {
+            guard fd >= 1, fcntl(Int32(fd), F_GETFD) != -1 else { throw EngineError(message: "fd \(fd) is not open") }
+            fh = FileHandle(fileDescriptor: Int32(fd), closeOnDealloc: false)
+          } else {
+            let path = req["path"] as? String ?? "/tmp/sue-stream.bin"
+            FileManager.default.createFile(atPath: path, contents: nil)
+            guard let file = FileHandle(forWritingAtPath: path) else { throw EngineError(message: "cannot write \(path)") }
+            fh = file
+          }
           let counter = StreamCounter(start: t0)
           let consumer = FBBlockDataConsumer.synchronousDataConsumer { data in fh.write(data); counter.add(data.count) }
           _ = cpuMs()
           try await blocking { try stream.startStreaming(consumer).block() }
+          if seconds <= 0 { while true { try await Task.sleep(nanoseconds: 3_600_000_000_000) } }
           try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
           try await blocking { try stream.stopStreaming().block() }
           fh.closeFile()

@@ -7,7 +7,9 @@ Cooke, FBSimulatorControl from Meta's idb). `TextToHIDEvents.swift` and `KeyCode
 
 Ops: `describe` (whole screen, AXe's JSON), `point` {x,y}, `tap` {x,y}, `swipe`, `type` {text}, `home`,
 `screenshot` {width,height,quality,path|inline}, `settle` {quiet_ms,first_change_ms}, `tap_settle_describe`,
-`tap_trace`, `stream` {codec h264|hevc, transport annexb|fmp4|mpegts, fps, scale, bitrate, seconds, path}.
+`tap_trace`, `stream` {codec h264|hevc, transport annexb|fmp4|mpegts, fps, scale, bitrate, seconds, path or fd}. With `fd`,
+the video goes to a descriptor the parent holds (a live view starts a `--no-bootstrap` engine and reads its stdout after
+the ready line); `seconds: 0` streams until the reader goes, and the engine then ends.
 
 Measured October 21, 2026 on an Apple M6 Mac mini (iOS 27.0 runtime), against AXe 1.8.0 with one process per call:
 
