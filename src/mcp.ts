@@ -7,6 +7,7 @@
 import { createInterface } from "node:readline";
 
 import { cancelAllJobs } from "./engine/jobs.ts";
+import { hosted } from "./hosted.ts";
 import { callTool, INSTRUCTIONS, toContent, TOOLS, VERSION } from "./registry.ts";
 import { setting } from "./settings.ts";
 
@@ -40,27 +41,11 @@ async function result(method: string, params: Record<string, unknown>, stateless
       const args = params.arguments && typeof params.arguments === "object" ? (params.arguments as Record<string, unknown>) : {};
       return toContent(await callTool(name, args));
     }
-    case "simulator-use/configure":
-      if (setting("HOSTED")) return configure(params);
-      throw Object.assign(new Error(`Method not found: ${method}`), { code: -32601 });
     default:
+      // NoMac Simulator's host asks a hosted server for more than tool calls (src/hosted.ts).
+      if (method.startsWith("simulator-use/") && setting("HOSTED")) return hosted(method, params);
       throw Object.assign(new Error(`Method not found: ${method}`), { code: -32601 });
   }
-}
-
-/**
- * A hosted session server (NoMac Simulator, SIMULATOR_USE_HOSTED) is started warm for a phone before anyone's
- * session; at hand-over the host tells it the account's build cache. Only an absolute path is taken.
- */
-function configure(params: Record<string, unknown>): Record<string, never> {
-  const cacheDir = params.cache_dir;
-  if (cacheDir !== undefined) {
-    if (typeof cacheDir !== "string" || !cacheDir.startsWith("/") || cacheDir.includes("\0") || cacheDir.split("/").includes("..") || cacheDir.length > 1024) {
-      throw Object.assign(new Error("cache_dir must be an absolute path"), { code: -32602 });
-    }
-    process.env.SIMULATOR_USE_CACHE_DIR = cacheDir;
-  }
-  return {};
 }
 
 /** Handles one message. Returns null for notifications, which get no answer. */
