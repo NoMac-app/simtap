@@ -175,6 +175,17 @@ export function derivedDataFor(project: Project): string {
 
 export type BuildResult = { ok: boolean; errors: Issue[]; warnings: number; log: string; ms: number; tail: string[] };
 
+/**
+ * xcodebuild, or xcodebuild under taskpolicy's clamp when SIMULATOR_USE_BUILD_CLAMP is utility or background:
+ * on a shared host the phones stay quick while builds run (NoMac Simulator), and what a build starts inherits
+ * the clamp and cannot lift it.
+ */
+export function buildCommand(args: string[]): [string, string[]] {
+  const clamp = setting("BUILD_CLAMP");
+  if (clamp === "utility" || clamp === "background") return ["/usr/sbin/taskpolicy", ["-c", clamp, "xcodebuild", ...args]];
+  return ["xcodebuild", args];
+}
+
 export async function build(
   project: Project,
   scheme: string,
@@ -202,7 +213,8 @@ export async function build(
   const started = Date.now();
   const out = createWriteStream(log);
   // Its own process group, so a cancel stops the compilers it started too.
-  const child = spawn("xcodebuild", args, { cwd: project.dir, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+  const [command, commandArgs] = buildCommand(args);
+  const child = spawn(command, commandArgs, { cwd: project.dir, detached: true, stdio: ["ignore", "pipe", "pipe"] });
   options.onCancel?.(() => {
     try {
       process.kill(-child.pid!, "SIGTERM");

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { getJob, startJob, waitFor } from "../src/engine/jobs.ts";
-import { findProject, formatIssue, knownFix, parseIssue } from "../src/engine/xcode.ts";
+import { buildCommand, findProject, formatIssue, knownFix, parseIssue } from "../src/engine/xcode.ts";
 import { ToolError } from "../src/errors.ts";
 
 test("xcodebuild lines become errors and warnings with their place", () => {
@@ -163,4 +163,19 @@ test("a build failure with a known cause says the fix: an xcconfig kept as a tem
   assert.match(knownFix([], ["ld: write() failed, errno=28 (No space left on device) for '/x'"]) ?? "", /disk is full/);
   assert.match(knownFix([{ severity: "error", message: "Could not resolve package dependencies:" }], []) ?? "", /Swift packages/);
   assert.equal(knownFix([{ severity: "error", message: "cannot find 'foo' in scope" }], []), undefined);
+});
+
+test("builds run under the host's clamp when one is set, and as plain xcodebuild otherwise", () => {
+  const saved = process.env.SIMULATOR_USE_BUILD_CLAMP;
+  try {
+    delete process.env.SIMULATOR_USE_BUILD_CLAMP;
+    assert.deepEqual(buildCommand(["-scheme", "App", "build"]), ["xcodebuild", ["-scheme", "App", "build"]]);
+    process.env.SIMULATOR_USE_BUILD_CLAMP = "utility";
+    assert.deepEqual(buildCommand(["-scheme", "App", "build"]), ["/usr/sbin/taskpolicy", ["-c", "utility", "xcodebuild", "-scheme", "App", "build"]]);
+    process.env.SIMULATOR_USE_BUILD_CLAMP = "maintenance; rm -rf /";
+    assert.deepEqual(buildCommand(["build"]), ["xcodebuild", ["build"]]);
+  } finally {
+    if (saved === undefined) delete process.env.SIMULATOR_USE_BUILD_CLAMP;
+    else process.env.SIMULATOR_USE_BUILD_CLAMP = saved;
+  }
 });

@@ -115,3 +115,23 @@ test("the skill stays within 2 KB and names the main commands", async () => {
   for (const command of ["run", "look", "act", "logs", "test", "use", "app", "record"]) assert.match(skill, new RegExp(`simulator-use ${command}\\b`));
   assert.doesNotMatch(skill, /—/, "no em dashes");
 });
+
+test("a hosted server takes the account's build cache at hand-over; a local one has no such method", async () => {
+  const saved = { hosted: process.env.SIMULATOR_USE_HOSTED, cache: process.env.SIMULATOR_USE_CACHE_DIR };
+  try {
+    delete process.env.SIMULATOR_USE_HOSTED;
+    assert.equal((await request("simulator-use/configure", { cache_dir: "/Volumes/nmw-x/cache" }))?.error?.code, -32601);
+    process.env.SIMULATOR_USE_HOSTED = "1";
+    assert.deepEqual((await request("simulator-use/configure", { cache_dir: "/Volumes/nmw-x/cache" }))?.result, {});
+    assert.equal(process.env.SIMULATOR_USE_CACHE_DIR, "/Volumes/nmw-x/cache");
+    for (const bad of ["relative/cache", "/Volumes/../etc", 5]) {
+      assert.equal((await request("simulator-use/configure", { cache_dir: bad }))?.error?.code, -32602, String(bad));
+    }
+    assert.equal(process.env.SIMULATOR_USE_CACHE_DIR, "/Volumes/nmw-x/cache");
+  } finally {
+    for (const [key, value] of [["SIMULATOR_USE_HOSTED", saved.hosted], ["SIMULATOR_USE_CACHE_DIR", saved.cache]] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
