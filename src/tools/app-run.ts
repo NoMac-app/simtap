@@ -2,7 +2,7 @@ import { bundleIdOf, install } from "../engine/apps.ts";
 import { answer, claimProject, currentJob, startJob } from "../engine/jobs.ts";
 import { bootDevice, findDevice, listDevices, pickDevice, type Device } from "../engine/simctl.ts";
 import { heldDevice, holdDevice } from "../engine/state.ts";
-import { build, builtApp, formatIssue, projectFor, remember } from "../engine/xcode.ts";
+import { build, builtApp, formatIssue, knownFix, projectFor, remember } from "../engine/xcode.ts";
 import { ToolError } from "../errors.ts";
 import { launchAndLook } from "./launch-app.ts";
 import type { Tool } from "./types.ts";
@@ -79,7 +79,8 @@ export const appRun: Tool = {
         const found = result.errors.length
           ? `with ${result.errors.length} error${result.errors.length === 1 ? "" : "s"}${result.warnings ? ` and ${result.warnings} warnings` : ""}. Full log: ${result.log}\n${errors.join("\n")}${more}`
           : `with no error lines. Full log: ${result.log}\nIts end:\n${result.tail.join("\n")}`;
-        return { text: `${note}Build of ${scheme} failed after ${seconds} s ${found}${quoted}`, isError: true };
+        const fix = knownFix(result.errors, result.tail);
+        return { text: `${note}Build of ${scheme} failed after ${seconds} s ${found}${fix ? `\nNext: ${fix}` : ""}${quoted}`, isError: true };
       }
       progress.step("installing");
       const app = builtApp(project, scheme, configuration);

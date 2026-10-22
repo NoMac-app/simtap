@@ -105,6 +105,27 @@ export async function pickScheme(project: Project, wanted?: string): Promise<str
 
 export type Issue = { file?: string; line?: number; column?: number; severity: "error" | "warning"; message: string };
 
+/**
+ * A failed build whose cause has a known fix, said with the fix: the errors alone read like a code problem. A
+ * project that keeps its xcconfig out of git as a template (IceCubesApp does) fails at once from a fresh clone; a
+ * full disk fails deep in the linker (errno 28); packages Xcode could not fetch fail before any compile.
+ */
+export function knownFix(errors: Issue[], tail: string[]): string | undefined {
+  const text = [...errors.map((e) => e.message), ...tail].join("\n");
+  const xcconfig = /Unable to open base configuration reference file '([^']+\.xcconfig)'/.exec(text)?.[1];
+  if (xcconfig) {
+    const name = basename(xcconfig);
+    return existsSync(`${xcconfig}.template`)
+      ? `the project keeps ${name} as a template: copy ${name}.template to ${name} (fill in its values if it has any), then build again.`
+      : `the project expects ${name}, which is not in its folder (often kept out of git): create it, then build again.`;
+  }
+  if (/No space left on device|errno=28/.test(text)) return "the disk is full: free space, or build with clean: true to clear this project's build cache.";
+  if (/Could not resolve package dependencies|Failed to clone repository|package resolution failed/i.test(text)) {
+    return "Xcode could not fetch the project's Swift packages: check the network, and that a private package's repository can be reached from this Mac.";
+  }
+  return undefined;
+}
+
 const LOCATED = /^(\/[^:]+):(\d+):(?:(\d+):)? (error|warning|fatal error): (.+)$/;
 const BARE = /^(?:xcodebuild: |clang: |ld: |\s*)?(error|fatal error): (.+)$/;
 

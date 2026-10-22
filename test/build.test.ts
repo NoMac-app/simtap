@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { getJob, startJob, waitFor } from "../src/engine/jobs.ts";
-import { findProject, formatIssue, parseIssue } from "../src/engine/xcode.ts";
+import { findProject, formatIssue, knownFix, parseIssue } from "../src/engine/xcode.ts";
 import { ToolError } from "../src/errors.ts";
 
 test("xcodebuild lines become errors and warnings with their place", () => {
@@ -151,4 +151,16 @@ test("Xcode 27 keeps a failure's place in the test's details: it is found there"
   const runs = [{ nodeType: "Device", children: [{ nodeType: "Test Plan Configuration", children: [{ nodeType: "Test Case Run", name: "XCTAssertEqual failed", sourceLocation: { filePath: "/tmp/failing/Tests/SignInTests.swift", lineNumber: 12 } }] }] }];
   assert.deepEqual(sourceLocation(runs), { filePath: "/tmp/failing/Tests/SignInTests.swift", lineNumber: 12 });
   assert.equal(sourceLocation([{ nodeType: "Device" }]), undefined);
+});
+
+test("a build failure with a known cause says the fix: an xcconfig kept as a template, a full disk, packages not fetched", () => {
+  const root = mkdtempSync(join(tmpdir(), "dl-fix-"));
+  writeFileSync(join(root, "App.xcconfig.template"), "TOKEN = ");
+  const missing = { severity: "error" as const, message: `Unable to open base configuration reference file '${join(root, "App.xcconfig")}'.` };
+  assert.match(knownFix([missing], []) ?? "", /copy App\.xcconfig\.template to App\.xcconfig/);
+  const noTemplate = { severity: "error" as const, message: `Unable to open base configuration reference file '${join(root, "Other.xcconfig")}'.` };
+  assert.match(knownFix([noTemplate], []) ?? "", /expects Other\.xcconfig/);
+  assert.match(knownFix([], ["ld: write() failed, errno=28 (No space left on device) for '/x'"]) ?? "", /disk is full/);
+  assert.match(knownFix([{ severity: "error", message: "Could not resolve package dependencies:" }], []) ?? "", /Swift packages/);
+  assert.equal(knownFix([{ severity: "error", message: "cannot find 'foo' in scope" }], []), undefined);
 });
