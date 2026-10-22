@@ -21,7 +21,7 @@ tabs: Login (selected) @158,822, Items @244,822
 - One line per element: kind, label, `#id` (the app's accessibility identifier), state and `@x,y`, the center in points.
 - Groups, icons inside buttons, scroll bars, the status bar and the keyboard's keys are folded away. The tab bar, scrolling and the keyboard are one line each.
 - Only what can be tapped is listed. An alert, a sheet, a menu or a full-screen view in front hides the screen behind it, and iOS's own permission prompts read as alerts over the app. Rows under the navigation bar, the tab bar or the keyboard are counted as hidden (above, below, to the left or right), not listed.
-- Web views (Capacitor, Expo DOM components), maps, games and iOS's out-of-process pickers have nothing for accessibility to read. They come back as one `unreadable` line with their place, so the agent knows to take a screenshot and tap by point.
+- A web view in UIKit (Capacitor, React Native's WebView, a sign-in page inside most apps) is read point by point, and its headings, texts, fields, checkboxes, buttons and links are listed like the rest. Web views hosted by SwiftUI, Safari's own pages, in-app browsers, maps, games and iOS's out-of-process pickers have nothing for accessibility to read. They come back as one `unreadable` line with their place, so the agent knows to take a screenshot and tap by point.
 - A screenshot, when asked for, is sized to points, so a point in the picture is a point to tap.
 - The sign-in screen above is about 70 tokens. The full accessibility tree it comes from is about 40,000.
 
@@ -54,7 +54,7 @@ Every step is checked, so nothing succeeds silently:
 - Typed text is read back from the field. When iOS's autocorrect or smart punctuation changes it (`--` to `—`, `'` to `’`), the text is pasted instead, which iOS takes as is. A field that still shows something else stops the call and says what it shows.
 - Text in any language (Café, 日本語, emoji) can be typed: what a US keyboard lacks goes through the Simulator's clipboard.
 - `fill` refuses anything that isn't a text field, so keys never land in whichever field still has focus.
-- A tap that changes nothing is reported, after waiting 2.5 s for late answers such as a permission prompt. A tap inside a web view says it can't be checked.
+- A tap that changes nothing is reported, after waiting 2.5 s for late answers such as a permission prompt. A tap inside an area that can't be read says it can't be checked.
 - A target that isn't on screen yet gets two seconds to appear, then fails with the next step: "2 elements are below: scroll down", or, when an alert came up in front, "Answer it first: tap "Cancel" or "Open"".
 - The first failing step stops the rest and returns the screen as it is now.
 - A new screen comes back whole; otherwise only what changed.
@@ -141,7 +141,7 @@ $ simulator-use call ui_look '{"find":"Sign In"}'
 
 ## What it can't do yet
 
-- Read inside web views, Flutter or game canvases: it says so, and a screenshot plus tap by point works.
+- Read web views hosted by SwiftUI, Safari's pages, in-app browsers, Flutter or game canvases: it says so, and a screenshot plus tap by point works.
 - Real devices, Android, rotating to landscape, pinch and multi-touch.
 - Reading text an app hides from accessibility: some React Native apps set a test id as the label, and the read says when labels look like that.
 
@@ -181,13 +181,14 @@ simulator-use sends nothing anywhere. There is no telemetry and no network acces
 
 ## How it works
 
-simulator-use reads the Simulator through [AXe](https://github.com/cameroncooke/AXe) (MIT), bundled at a pinned version with its checksum checked at packaging, and through `xcrun simctl`. There is no test runner to build, so the first call is as fast as the rest.
+simulator-use reads the Simulator through a small native engine (`native/engine`), one process per Simulator, built on the frameworks of [AXe](https://github.com/cameroncooke/AXe) (MIT), which is bundled at a pinned version with its checksum checked at packaging, and through `xcrun simctl`. The engine keeps the Simulator's input, its accessibility session and its screen buffer open, so a tap takes a millisecond, a whole screen a few hundred, and a step waits until the pixels stop changing instead of a fixed time. It reads web views point by point. When the engine can't run, AXe does the same work one process per call. There is no test runner to build, so the first call is as fast as the rest.
 
 ## Develop
 
 ```sh
 npm install
 npm run axe        # fetch the pinned AXe into vendor/axe
+npm run native     # build the engine and the clipboard helper into vendor/axe (IDB_HEADERS: idb's PrivateHeaders)
 npm test           # node --test, no build needed
 npm run build      # dist/ for the npm package
 node bin/simulator-use.js look

@@ -227,9 +227,9 @@ async function act(udid: string, deviceLabel: string, lines: string[], called: n
           await fresh();
         }
         if (render(snap) === was) {
-          // Web views and custom drawing can't be read, so a tap there can't be checked either.
+          // What can't be read (some web views, custom drawing) can't show a tap's effect either.
           const blind = snap.unreadable.some((f) => r.x >= f.x && r.x <= f.x + f.width && r.y >= f.y && r.y <= f.y + f.height);
-          notes.push(blind ? `step ${n} (tap ${describeTarget(step.target)}): landed in web or custom content, which can't be read; check it with ui_look screenshot` : `step ${n} (tap ${describeTarget(step.target)}): no visible change`);
+          notes.push(blind ? `step ${n} (tap ${describeTarget(step.target)}): landed in content that can't be read (some web views, custom drawing); check it with ui_look screenshot` : `step ${n} (tap ${describeTarget(step.target)}): no visible change`);
         }
         return;
       }
