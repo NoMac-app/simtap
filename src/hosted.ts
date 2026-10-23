@@ -5,13 +5,17 @@
  */
 
 import { createHash } from "node:crypto";
-import { createReadStream, createWriteStream } from "node:fs";
-import { chmod, lstat, lutimes, mkdir, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { createReadStream, createWriteStream, existsSync, statSync } from "node:fs";
+import { chmod, lstat, lutimes, mkdir, mkdtemp, readFile, readlink, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, sep } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 import { run } from "./engine/exec.ts";
+import { cancelAllJobs } from "./engine/jobs.ts";
+import { stateDir } from "./engine/state.ts";
+import { callTool } from "./registry.ts";
 
 type Kind = "file" | "executable" | "symlink";
 type Entry = { path: string; size: number; mtime_ms: number; sha256: string; kind?: Kind };
@@ -117,6 +121,46 @@ async function place(params: Record<string, unknown>): Promise<Placed> {
   return { ...sync.place };
 }
 
+/** An archive holds the files the manifest asked for and the folders they are in, nothing else. */
+async function onlyAskedFor(file: string, missing: Set<string>): Promise<void> {
+  const { stdout } = await run("/usr/bin/tar", ["-tzf", file], { timeoutMs: 5 * 60_000 });
+  for (const line of stdout.split("\n")) {
+    const member = line.replace(/^\.\//, "").replace(/\/+$/, "");
+    if (member === "" || member === "." || missing.has(member)) continue;
+    if (![...missing].some((path) => path.startsWith(`${member}/`))) throw new Error(`archive_unexpected: ${member.slice(0, 200)} was not asked for`);
+  }
+}
+
+/**
+ * Every file the manifest asked for is in the folder with the kind, size and content it announced. A sync whose
+ * archive lacked one (a client that split a large sync, or a broken archive) fails here, before the index says
+ * the workspace has it, so the next manifest asks for it again.
+ */
+async function asAnnounced(root: string, entries: Entry[], missing: Set<string>): Promise<void> {
+  const byPath = new Map(entries.map((e) => [e.path, e]));
+  const wrong: string[] = [];
+  for (const path of missing) {
+    const e = byPath.get(path);
+    if (!e) continue;
+    const at = join(root, path);
+    const st = await lstat(at).catch(() => undefined);
+    let why: string | undefined;
+    if (!st) why = "not in the archive";
+    else if ((e.kind ?? "file") === "symlink") {
+      if (!st.isSymbolicLink()) why = "not a symbolic link";
+      else if (createHash("sha256").update(await readlink(at)).digest("hex") !== e.sha256) why = "a different link";
+    } else if (!st.isFile()) why = "not a file";
+    else if (st.size !== e.size) why = `${st.size} bytes, not ${e.size}`;
+    else {
+      const hash = createHash("sha256");
+      await pipeline(createReadStream(at), hash);
+      if (hash.digest("hex") !== e.sha256) why = "different content";
+    }
+    if (why) wrong.push(`${path.slice(0, 200)} (${why})`);
+  }
+  if (wrong.length) throw new Error(`archive_incomplete: ${wrong.length} of the ${missing.size} files asked for are not as the manifest said: ${wrong.slice(0, 3).join("; ")}`);
+}
+
 async function write(sync: Sync, archive: Record<string, unknown> | undefined): Promise<{ root: string; written: number; removed: number }> {
   const root = join(srcRoot(), sync.project);
   const work = join(srcRoot(), ".nomac-sync");
@@ -140,18 +184,28 @@ async function write(sync: Sync, archive: Record<string, unknown> | undefined): 
         await pipeline(createReadStream(file), hash);
         if (hash.digest("hex") !== archive.sha256) throw new Error("archive_checksum_mismatch");
       }
+      await onlyAskedFor(file, sync.missing);
       // bsdtar keeps every entry inside root: it strips a leading / and refuses .. without -P.
       await run("/usr/bin/tar", ["-xzf", file, "-C", root], { timeoutMs: 10 * 60_000 });
     } finally {
       await unlink(file).catch(() => {});
     }
   }
+  // The index records only what is really here: every file the manifest asked for, as it announced it.
+  await asAnnounced(root, entries, sync.missing);
+  // Modes and mtimes are written only where they differ: reading is cheap, and a sync then costs what changed,
+  // not every file of the project (a host busy preparing a phone made 758 writes take 7 s, October 23).
   for (const e of entries) {
     const path = join(root, e.path);
     const kind = e.kind ?? "file";
-    if (kind !== "symlink") await chmod(path, kind === "executable" ? 0o755 : 0o644).catch(() => {});
-    const when = new Date(e.mtime_ms);
-    await lutimes(path, when, when).catch(() => {});
+    const st = await lstat(path).catch(() => undefined);
+    if (!st) continue;
+    const mode = kind === "executable" ? 0o755 : 0o644;
+    if (kind !== "symlink" && (st.mode & 0o777) !== mode) await chmod(path, mode).catch(() => {});
+    if (Math.floor(st.mtimeMs) !== e.mtime_ms) {
+      const when = new Date(e.mtime_ms);
+      await lutimes(path, when, when).catch(() => {});
+    }
   }
   const before = await readIndex(sync.project);
   const now = new Set(entries.map((e) => e.path));
@@ -171,10 +225,170 @@ async function write(sync: Sync, archive: Record<string, unknown> | undefined): 
 }
 
 /** A hosted method; anything else is not one. */
+// ---- Answers and files ------------------------------------------------------------------------------------
+
+const FILE = /^file_[a-f0-9]{40}$/;
+const GET = /^get_[a-f0-9]{40}$/;
+// The latest files named in answers, by id; older ones are forgotten.
+const KEEP_FILES = 500;
+const files = new Map<string, string>();
+
+/** The folders whose files an answer may name: the workspace, the build cache and simulator-use's own. */
+function fileRoots(): string[] {
+  return [workspace, process.env.SIMULATOR_USE_CACHE_DIR, stateDir()].filter((r): r is string => typeof r === "string" && r.startsWith("/"));
+}
+
+function fileId(path: string): string {
+  const id = `file_${createHash("sha1").update(path).digest("hex")}`;
+  files.delete(id);
+  files.set(id, path);
+  while (files.size > KEEP_FILES) files.delete(files.keys().next().value!);
+  return id;
+}
+
+/** One answer text as NoMac's customer reads it (see hostedAnswer). */
+export function hostedText(text: string): string {
+  let out = text;
+  if (workspace) {
+    const src = `${workspace}/src/`;
+    // A path in a synced project reads relative to that project, as on the customer's own machine.
+    out = out.replace(new RegExp(`${escapeRegExp(src)}prj_[a-f0-9]{32}(/|\\b)`, "g"), (_m, slash: string) => (slash === "/" ? "" : "."));
+  }
+  const roots = fileRoots();
+  // Any other file of this host (a build log, a recording, saved logs) becomes an id NoMac turns into a link.
+  return out.replace(/\/[^\s'"`()<>,;]+/g, (candidate) => {
+    const path = candidate.replace(/[.:]+$/, "");
+    const trailing = candidate.slice(path.length);
+    if (!roots.some((root) => path === root || path.startsWith(root.endsWith(sep) ? root : `${root}${sep}`))) return candidate;
+    try {
+      if (!existsSync(path) || !statSync(path).isFile()) return candidate;
+    } catch {
+      return candidate;
+    }
+    // The name after the id, so the download keeps it: file_<id>/build-1792758883520.log.
+    return `${fileId(path)}/${basename(path)}${trailing}`;
+  });
+}
+
+/**
+ * A tool's answer as a NoMac Simulator customer reads it (SIMULATOR_USE_HOSTED): paths in a synced project
+ * relative to it, and this host's other files as file ids, which NoMac's API turns into download links
+ * (simulator-use/get). The customer never reads a path of the host.
+ */
+export function hostedAnswer<T extends { content: unknown[] }>(result: T): T {
+  return { ...result, content: result.content.map((c) => (c && typeof c === "object" && (c as { type?: unknown }).type === "text" ? { ...c, text: hostedText(String((c as { text?: unknown }).text ?? "")) } : c)) };
+}
+
+type Got = { state: "running" | "done" | "failed"; size?: number; error?: string };
+// The latest uploads by id, so a repeated get answers its state; older ones are forgotten.
+const KEEP_GETS = 100;
+const gets = new Map<string, Got>();
+
+/**
+ * Uploads a file an answer named to a link NoMac signed (a presigned PUT), for its download link. Answers within
+ * a few seconds, or that it runs (a recording takes longer): the same id answers its state, and starts nothing new.
+ */
+async function get(params: Record<string, unknown>): Promise<Got> {
+  const { id, file, url } = params as { id: unknown; file: unknown; url: unknown };
+  if (typeof id !== "string" || !GET.test(id) || typeof file !== "string" || !FILE.test(file) || typeof url !== "string" || !url.startsWith("https://")) throw invalid("get id, file or url");
+  let got = gets.get(id);
+  if (!got) {
+    const path = files.get(file);
+    if (!path || !existsSync(path)) throw Object.assign(new Error("file_not_found"), { code: -32000 });
+    const started: Got = { state: "running" };
+    gets.set(id, started);
+    while (gets.size > KEEP_GETS) gets.delete(gets.keys().next().value!);
+    upload(path, url).then(
+      (size) => Object.assign(started, { state: "done", size }),
+      (error: Error) => Object.assign(started, { state: "failed", error: error.message.slice(0, 300) }),
+    );
+    got = started;
+  }
+  const deadline = Date.now() + ANSWER_WITHIN_MS;
+  while (got.state === "running" && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+  return { ...got };
+}
+
+/** Streams the file to the link, never whole in memory: as many bytes as it had when the upload began. */
+async function upload(path: string, url: string): Promise<number> {
+  const { size } = statSync(path);
+  const body = size === 0 ? new Uint8Array() : (Readable.toWeb(createReadStream(path, { start: 0, end: size - 1 })) as ReadableStream<Uint8Array>);
+  const response = await fetch(url, { method: "PUT", body, headers: { "content-length": String(size) }, duplex: "half" } as RequestInit);
+  await response.body?.cancel();
+  if (!response.ok) throw new Error(`upload_failed: storage answered ${response.status}`);
+  return size;
+}
+
+// ---- The pool's warm-up -----------------------------------------------------------------------------------
+
+const WARM_BUNDLE = "app.nomac.prewarm";
+const WARM_FILES: Record<string, string> = {
+  "project.yml": [
+    "name: Warm",
+    "options:",
+    "  deploymentTarget:",
+    '    iOS: "18.0"',
+    "targets:",
+    "  Warm:",
+    "    type: application",
+    "    platform: iOS",
+    "    sources: [Sources]",
+    "    settings:",
+    "      base:",
+    `        PRODUCT_BUNDLE_IDENTIFIER: ${WARM_BUNDLE}`,
+    "        GENERATE_INFOPLIST_FILE: YES",
+    "        INFOPLIST_KEY_UILaunchScreen_Generation: YES",
+    "        CODE_SIGNING_ALLOWED: NO",
+    '        SWIFT_VERSION: "6.0"',
+    "",
+  ].join("\n"),
+  "Sources/App.swift": ['import SwiftUI', "", "@main", "struct WarmApp: App {", '  var body: some Scene { WindowGroup { Text("Ready") } }', "}", ""].join("\n"),
+};
+let warming: Promise<{ ok: boolean; ms: number; error?: string }> | undefined;
+
+/**
+ * Before NoMac hands this phone out (plan section 8b, item 22): a one-screen app built for the phone, installed,
+ * launched and removed through app_run, as a customer's would be, so the customer's first build and install do
+ * not pay for Xcode and the phone's installer starting in a wiped home (measured on the M6: the first build 13 s
+ * instead of 22, the first install 1.4 s instead of 5). Nothing of it stays: the app is removed, its folder
+ * deleted. { stop: true } ends a warm-up that runs (a customer now waits on this phone).
+ */
+async function warm(params: Record<string, unknown>): Promise<{ ok: boolean; ms: number; error?: string; stopped?: boolean }> {
+  if (params.stop === true) {
+    if (!warming) return { ok: true, ms: 0, stopped: false };
+    cancelAllJobs();
+    return { ...(await warming), stopped: true };
+  }
+  if (workspace) throw invalid("the warm-up runs before the hand-over");
+  warming ??= (async () => {
+    const started = Date.now();
+    const dir = await mkdtemp(join(tmpdir(), "simulator-use-warm-"));
+    try {
+      for (const [name, text] of Object.entries(WARM_FILES)) {
+        await mkdir(dirname(join(dir, name)), { recursive: true });
+        await writeFile(join(dir, name), text);
+      }
+      const ran = await callTool("app_run", { path: dir }, { waitForJobs: true });
+      const removed = await callTool("app_control", { action: "uninstall", app: WARM_BUNDLE });
+      const failed = ran.isError ? ran : removed.isError && !/not installed|No app/i.test(removed.text) ? removed : undefined;
+      return failed ? { ok: false, ms: Date.now() - started, error: failed.text.slice(0, 300) } : { ok: true, ms: Date.now() - started };
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  })().finally(() => (warming = undefined));
+  return warming;
+}
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 export async function hosted(method: string, params: Record<string, unknown>): Promise<unknown> {
   switch (method) {
     case "simulator-use/configure":
       return configure(params);
+    case "simulator-use/get":
+      return get(params);
+    case "simulator-use/warm":
+      return warm(params);
     case "simulator-use/sync":
       if (params.op === "manifest") return manifest(params);
       if (params.op === "place") return place(params);
