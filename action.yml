@@ -1,0 +1,75 @@
+name: simulator-use cloud
+description: Build, run and test an iOS app on a NoMac cloud iPhone Simulator from any runner, and post the result on the pull request.
+author: NoMac
+branding:
+  icon: smartphone
+  color: blue
+
+inputs:
+  api-key:
+    description: A NoMac API key for the account that pays (a repository secret, such as secrets.NOMAC_API_KEY)
+    required: true
+  path:
+    description: The folder with the Xcode project, .xcworkspace or project.yml
+    default: "."
+  tests:
+    description: Run the project's tests too
+    default: "true"
+  comment:
+    description: Post the result as a comment on the pull request (needs pull-requests write permission)
+    default: "true"
+  version:
+    description: The simulator-use version from npm
+    default: "latest"
+
+outputs:
+  result:
+    description: passed or failed
+    value: ${{ steps.run.outputs.result }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v5
+      with:
+        node-version: 22
+    - id: run
+      shell: bash
+      env:
+        NOMAC_API_KEY: ${{ inputs.api-key }}
+        SIMULATOR_USE_STATE_DIR: ${{ runner.temp }}/simulator-use-state
+        PROJECT: ${{ inputs.path }}
+        TESTS: ${{ inputs.tests }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        mkdir -p "$RUNNER_TEMP/simulator-use"
+        args=(cloud run "$PROJECT" --out "$RUNNER_TEMP/simulator-use")
+        [ "$TESTS" = "true" ] && args+=(--tests)
+        set +e
+        npx -y "simulator-use@$VERSION" "${args[@]}" > "$RUNNER_TEMP/simulator-use/result.txt" 2>&1
+        code=$?
+        set -e
+        cat "$RUNNER_TEMP/simulator-use/result.txt"
+        echo "result=$([ $code = 0 ] && echo passed || echo failed)" >> "$GITHUB_OUTPUT"
+        exit 0
+    - uses: actions/upload-artifact@v4
+      with:
+        name: simulator-use-${{ github.run_id }}-${{ github.job }}
+        path: ${{ runner.temp }}/simulator-use
+    - if: inputs.comment == 'true' && github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      env:
+        RESULT_FILE: ${{ runner.temp }}/simulator-use/result.txt
+        RESULT: ${{ steps.run.outputs.result }}
+      with:
+        script: |
+          const fs = require("fs");
+          const text = fs.readFileSync(process.env.RESULT_FILE, "utf8").slice(-6000);
+          const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+          const body = `**simulator-use on a NoMac iPhone Simulator: ${process.env.RESULT}**\n\n\`\`\`\n${text}\n\`\`\`\nThe screenshot is in [this run's artifacts](${run}).`;
+          await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });
+    - if: steps.run.outputs.result != 'passed'
+      shell: bash
+      run: |
+        echo "simulator-use cloud run failed: see the output above." >&2
+        exit 1
