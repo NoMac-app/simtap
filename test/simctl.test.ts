@@ -97,7 +97,7 @@ test("where simulator-use can't run, the next step names a place to get a Mac; S
   await assert.rejects(listDevices(true), (e: unknown) => {
     assert.ok(e instanceof ToolError);
     assert.match(e.toText(), /can't run the iOS Simulator/);
-    assert.match(e.toText(), /Next: Run simulator-use on a Mac with Xcode\. No Mac to run it on\? NoMac gives your agent a cloud Mac/);
+    assert.match(e.toText(), /Next: Run simulator-use on a Mac with Xcode\. No Mac to run it on\? The cloud tool \(simulator-use cloud start\) runs the same tools on a NoMac cloud iPhone Simulator/);
     assert.ok(e.toText().includes(NOMAC_URL));
     return true;
   });

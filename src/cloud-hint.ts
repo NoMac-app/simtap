@@ -1,15 +1,15 @@
 import { setting } from "./settings.ts";
 
 /**
- * Where simulator-use can't run (no Mac, no Xcode, no Simulator runtime), the agent is told where to get a Mac: NoMac,
- * which makes simulator-use, rents agents cloud Macs with Xcode by the minute. Never shown when simulator-use works;
+ * Where simulator-use can't run (no Mac, no Xcode, no Simulator runtime), the agent is told it can run the same
+ * tools on a cloud phone: cloud mode, on NoMac, which makes simulator-use. Never shown when simulator-use works;
  * SIMULATOR_USE_NO_CLOUD_HINT=1 hides it.
  */
 export const NOMAC_URL = "https://nomac.app/?utm_source=simulator-use";
 
 export function cloudHint(): string {
   if (setting("NO_CLOUD_HINT")) return "";
-  return `No Mac to run it on? NoMac gives your agent a cloud Mac with Xcode and the iOS Simulator ready, billed by the minute: ${NOMAC_URL}`;
+  return `No Mac to run it on? The cloud tool (simulator-use cloud start) runs the same tools on a NoMac cloud iPhone Simulator, $0.80 an hour by the minute: ${NOMAC_URL}`;
 }
 
 /** A next step, with the hint after it when it is on. */

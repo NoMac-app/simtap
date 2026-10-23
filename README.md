@@ -74,6 +74,7 @@ Every step is checked, so nothing succeeds silently:
 | `screen_record` | `simulator-use record start` | Starts or stops a video of the screen; stop answers with the MP4 |
 | `job_status` | `simulator-use job` | Waits up to 40 s for a long build and answers with its result, or its progress |
 | `job_cancel` | `simulator-use cancel` | Stops a job |
+| `cloud` | `simulator-use cloud start` | `start`, `status`, `stop` a NoMac cloud phone that every tool then runs on; `run` builds, tests and stops in one call (see Cloud) |
 
 The MCP server and the CLI are built from one list, so they always match. The tool list and instructions stay under 4,000 tokens; a test enforces it.
 
@@ -177,9 +178,34 @@ Agents that work from a shell can use the CLI instead; `skill/SKILL.md` in the p
 
 From a shell: `npx simulator-use look`.
 
+## Cloud
+
+Where this machine can't run the Simulator (Linux, Windows, a cloud agent), or for CI, the same tools run on a cloud iPhone Simulator on [NoMac](https://nomac.app/?utm_source=simulator-use), a Mac with Xcode, $0.80 an hour by the minute:
+
+```
+simulator-use cloud start      # signs in through a link the first time (or NOMAC_API_KEY), starts a phone
+simulator-use run              # every tool now runs there; run and test send the project first
+simulator-use cloud stop       # ends it; the tools run on this machine again
+simulator-use cloud run . --tests   # CI in one line: start, build, run, test, a screenshot, stop
+```
+
+Only the files the phone lacks are sent (a one-file change sends one file), into the account's own encrypted workspace, kept between sessions so builds stay incremental; build output and dependencies stay behind. The `cloud` tool does the same over MCP.
+
+On GitHub, from any runner, with the result posted on each pull request and the screenshot kept as an artifact:
+
+```yaml
+permissions:
+  pull-requests: write
+steps:
+  - uses: actions/checkout@v5
+  - uses: NoMac-app/simulator-use@v0.10
+    with:
+      api-key: ${{ secrets.NOMAC_API_KEY }}
+```
+
 ## Privacy
 
-simulator-use sends nothing anywhere. There is no telemetry and no network access at runtime: it runs `xcrun simctl`, the bundled AXe binary and `sips`, all on your Mac.
+simulator-use sends nothing unless cloud mode is on. There is no telemetry and no network access at runtime: it runs `xcrun simctl`, the bundled AXe binary and `sips`, all on your Mac. With cloud on, it sends the project being run or tested, and the tools' calls, to NoMac.
 
 ## How it works
 

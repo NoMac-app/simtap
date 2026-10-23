@@ -1,9 +1,13 @@
 import { createRequire } from "node:module";
 
+import { cloudState } from "./cloud/account.ts";
+import { forward } from "./cloud/forward.ts";
 import { ToolError } from "./errors.ts";
+import { setting } from "./settings.ts";
 import { appControl } from "./tools/app-control.ts";
 import { appLogs } from "./tools/app-logs.ts";
 import { appRun } from "./tools/app-run.ts";
+import { cloud } from "./tools/cloud.ts";
 import { deviceUse } from "./tools/device-use.ts";
 import { devices } from "./tools/devices.ts";
 import { jobCancel, jobStatus } from "./tools/jobs.ts";
@@ -16,7 +20,7 @@ import { uiLook } from "./tools/ui-look.ts";
 export const VERSION: string = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 
 /** Every tool, in the order clients list them. The MCP server and the CLI are both built from this. */
-export const TOOLS: Tool[] = [devices, deviceUse, appRun, uiLook, uiAct, appControl, appLogs, testsRun, jobStatus, jobCancel, screenRecord];
+export const TOOLS: Tool[] = [devices, deviceUse, appRun, uiLook, uiAct, appControl, appLogs, testsRun, jobStatus, jobCancel, screenRecord, cloud];
 
 /** How the tools fit together, sent once to MCP clients. */
 export const INSTRUCTIONS = [
@@ -61,6 +65,8 @@ export async function callTool(name: string, args: Record<string, unknown> = {},
   const problem = argumentProblem(tool, args);
   if (problem) return { text: problem, isError: true };
   try {
+    // With cloud on, every other tool runs on the NoMac phone (src/cloud/forward.ts).
+    if (tool !== cloud && !setting("HOSTED") && (await cloudState()).on) return await forward(tool.name, args, context);
     return await tool.run(args, context);
   } catch (error) {
     if (error instanceof ToolError) return { text: error.toText(), isError: true };
