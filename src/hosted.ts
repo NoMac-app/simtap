@@ -4,9 +4,10 @@
  * work happens here: hostd checks every request's shape first (mac-protocol's sim operation) and passes it on.
  */
 
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync, statSync } from "node:fs";
-import { chmod, lstat, lutimes, mkdir, mkdtemp, readFile, readlink, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, lutimes, mkdir, mkdtemp, readdir, readFile, readlink, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { Readable } from "node:stream";
@@ -15,6 +16,7 @@ import { pipeline } from "node:stream/promises";
 import { run } from "./engine/exec.ts";
 import { cancelAllJobs } from "./engine/jobs.ts";
 import { stateDir } from "./engine/state.ts";
+import { normalizeRemote, SKIP_DIRS } from "./cloud/sync.ts";
 import { callTool } from "./registry.ts";
 
 type Kind = "file" | "executable" | "symlink";
@@ -319,6 +321,227 @@ async function upload(path: string, url: string): Promise<number> {
   return size;
 }
 
+// ---- A project from a git link ----------------------------------------------------------------------------
+
+const CLONE = /^clone_[a-f0-9]{40}$/;
+const REF = /^(?!-)[A-Za-z0-9._/-]{1,200}$/;
+type Cloned = { state: "running" | "done" | "failed"; root?: string; commit?: string; error?: string };
+// The latest fetches by id, so a repeated clone answers its state; older ones are forgotten.
+const KEEP_CLONES = 50;
+const clones = new Map<string, Cloned>();
+
+/**
+ * A repository into the workspace (NoMac's hosted MCP: app_run from a git link): fetched shallow at a branch, tag
+ * or commit into src/git_<hash of the remote>, so the same repository builds incrementally the next time (only
+ * changed files are rewritten). A token for a private repository goes to git through its environment, never in an
+ * argument another user could read, and is not kept. Answers within a few seconds, or that it runs.
+ */
+async function clone(params: Record<string, unknown>): Promise<Cloned> {
+  const { id, url, ref, token } = params as { id: unknown; url: unknown; ref: unknown; token: unknown };
+  if (typeof id !== "string" || !CLONE.test(id)) throw invalid("clone id");
+  let job = clones.get(id);
+  if (!job) {
+    if (typeof url !== "string" || !gitUrl(url)) throw invalid("url: an https link to a git repository, without a user or password in it");
+    if (ref !== undefined && (typeof ref !== "string" || !REF.test(ref))) throw invalid("ref: a branch, tag or commit");
+    if (token !== undefined && (typeof token !== "string" || !/^[\x21-\x7e]{1,4096}$/.test(token))) throw invalid("token");
+    srcRoot();
+    const started: Cloned = { state: "running" };
+    clones.set(id, started);
+    while (clones.size > KEEP_CLONES) clones.delete(clones.keys().next().value!);
+    fetchRepository(url, ref as string | undefined, token as string | undefined).then(
+      (result) => Object.assign(started, { state: "done" }, result),
+      (error: Error) => Object.assign(started, { state: "failed", error: error.message.slice(0, 300) }),
+    );
+    job = started;
+  }
+  const deadline = Date.now() + ANSWER_WITHIN_MS;
+  while (job.state === "running" && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+  return { ...job };
+}
+
+/** https only, with a host and a path, no user or password (a token goes in token), nothing a shell would read. */
+export function gitUrl(url: string): boolean {
+  if (url.length > 2048 || /\s/.test(url)) return false;
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" && Boolean(u.hostname) && u.pathname.length > 1 && !u.username && !u.password && !u.search && !u.hash;
+  } catch {
+    return false;
+  }
+}
+
+async function fetchRepository(url: string, ref: string | undefined, token: string | undefined): Promise<{ root: string; commit: string }> {
+  const root = join(srcRoot(), `git_${createHash("sha256").update(normalizeRemote(url)).digest("hex").slice(0, 32)}`);
+  const git = (args: string[], timeoutMs = 60_000) => gitRun(args, gitEnv(url, token), timeoutMs, token);
+  if (!existsSync(join(root, ".git"))) {
+    await mkdir(root, { recursive: true });
+    await git(["init", "-q", root]);
+    await git(["-C", root, "remote", "add", "origin", url]);
+  } else {
+    await git(["-C", root, "remote", "set-url", "origin", url]);
+  }
+  await git(["-C", root, "fetch", "--depth", "1", "--no-tags", "origin", ref ?? "HEAD"], 10 * 60_000);
+  await git(["-C", root, "checkout", "--quiet", "--force", "--detach", "FETCH_HEAD"]);
+  if (existsSync(join(root, ".gitmodules"))) await git(["-C", root, "submodule", "update", "--init", "--recursive", "--depth", "1"], 10 * 60_000);
+  const commit = (await git(["-C", root, "rev-parse", "--short=12", "HEAD"])).trim();
+  return { root, commit };
+}
+
+/** git never asks, and a token goes as an HTTP header set from the environment (GIT_CONFIG_*), for this host only. */
+export function gitEnv(url: string, token: string | undefined): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "/usr/bin/false" };
+  if (token) {
+    const { hostname } = new URL(url);
+    const user = hostname === "gitlab.com" ? "oauth2" : hostname === "bitbucket.org" ? "x-token-auth" : "x-access-token";
+    Object.assign(env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: `http.https://${hostname}/.extraHeader`, GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(`${user}:${token}`).toString("base64")}` });
+  }
+  return env;
+}
+
+function gitRun(args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, token: string | undefined): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile("git", args, { env, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: "utf8" }, (error, stdout, stderr) => {
+      if (!error) return resolve(stdout);
+      // git's own words, without the token if it ever printed it.
+      const said = (stderr || error.message).trim().split(token || "\0").join("***");
+      reject(new Error(`git ${args.find((a) => !a.startsWith("-") && a !== "-C" && !a.startsWith("/")) ?? ""}: ${error.killed ? "timed out" : said.split("\n").slice(-3).join(" ")}`));
+    });
+  });
+}
+
+// ---- A project or an app from an upload ---------------------------------------------------------------------
+
+const FETCH = /^fetch_[a-f0-9]{40}$/;
+const UPLOAD_NAME = /^[A-Za-z0-9._-]{1,80}$/;
+type Fetched = { state: "running" | "done" | "failed"; root?: string; app?: string; written?: number; removed?: number; error?: string };
+// The latest fetches by id, so a repeated fetch answers its state; older ones are forgotten.
+const KEEP_FETCHES = 50;
+const fetches = new Map<string, Fetched>();
+
+/**
+ * An archive uploaded to NoMac (a project without a git remote, or a .app built elsewhere), into the workspace at
+ * src/upload_<hash of its name>: downloaded from the link NoMac signed, its checksum checked, unpacked aside and
+ * copied in where it differs, so an unchanged file keeps its mtime and the next build stays incremental. A .tar.gz
+ * or a .zip. Answers within a few seconds, or that it runs.
+ */
+async function fetchUpload(params: Record<string, unknown>): Promise<Fetched> {
+  const { id, url, sha256, name } = params as { id: unknown; url: unknown; sha256: unknown; name: unknown };
+  if (typeof id !== "string" || !FETCH.test(id)) throw invalid("fetch id");
+  let job = fetches.get(id);
+  if (!job) {
+    if (typeof url !== "string" || !url.startsWith("https://")) throw invalid("url");
+    if (typeof sha256 !== "string" || !/^[a-f0-9]{64}$/.test(sha256)) throw invalid("sha256");
+    if (name !== undefined && (typeof name !== "string" || !UPLOAD_NAME.test(name))) throw invalid("name: letters, digits, dot, dash and underscore");
+    srcRoot();
+    const started: Fetched = { state: "running" };
+    fetches.set(id, started);
+    while (fetches.size > KEEP_FETCHES) fetches.delete(fetches.keys().next().value!);
+    unpackUpload(url, sha256, (name as string | undefined) ?? "upload").then(
+      (result) => Object.assign(started, { state: "done" }, result),
+      (error: Error) => Object.assign(started, { state: "failed", error: error.message.slice(0, 300) }),
+    );
+    job = started;
+  }
+  const deadline = Date.now() + ANSWER_WITHIN_MS;
+  while (job.state === "running" && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+  return { ...job };
+}
+
+async function unpackUpload(url: string, sha256: string, name: string): Promise<{ root: string; app?: string; written: number; removed: number }> {
+  const root = join(srcRoot(), `upload_${createHash("sha256").update(name).digest("hex").slice(0, 32)}`);
+  // Beside the workspace's projects, on the same volume, so a changed file is moved in, not copied.
+  await mkdir(srcRoot(), { recursive: true });
+  const work = await mkdtemp(join(srcRoot(), ".nomac-upload-"));
+  try {
+    const file = join(work, "archive");
+    const response = await fetch(url);
+    if (!response.ok || !response.body) throw new Error(`upload_download_failed: ${response.status}`);
+    await pipeline(Readable.fromWeb(response.body as never), createWriteStream(file));
+    const hash = createHash("sha256");
+    await pipeline(createReadStream(file), hash);
+    if (hash.digest("hex") !== sha256) throw new Error("upload_checksum_mismatch: the file is not the one its sha256 names");
+    const out = join(work, "out");
+    await mkdir(out);
+    const head = (await readFile(file)).subarray(0, 4);
+    if (head[0] === 0x50 && head[1] === 0x4b) await run("/usr/bin/ditto", ["-x", "-k", file, out], { timeoutMs: 10 * 60_000 });
+    // bsdtar keeps every entry inside out: it strips a leading / and refuses .. without -P.
+    else if (head[0] === 0x1f && head[1] === 0x8b) await run("/usr/bin/tar", ["-xzf", file, "-C", out], { timeoutMs: 10 * 60_000 });
+    else throw new Error("upload_unreadable: send a .tar.gz or a .zip");
+    await mkdir(root, { recursive: true });
+    const { written, removed } = await mirror(out, root);
+    const app = await appIn(root);
+    return { root, ...(app ? { app } : {}), written, removed };
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Makes to hold what from holds: a file whose content differs is moved in, the rest keep theirs and their mtimes;
+ * what to has beyond from goes, but build output and dependencies stay (they were made here).
+ */
+async function mirror(from: string, to: string): Promise<{ written: number; removed: number }> {
+  const files = new Set<string>();
+  let written = 0;
+  const walk = async (dir: string): Promise<void> => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      const rel = path.slice(from.length + 1);
+      if (entry.isDirectory()) {
+        await walk(path);
+        continue;
+      }
+      files.add(rel);
+      const target = join(to, rel);
+      if (await sameContent(path, target, entry.isSymbolicLink())) continue;
+      await mkdir(dirname(target), { recursive: true });
+      await rm(target, { recursive: true, force: true });
+      await rename(path, target);
+      written++;
+    }
+  };
+  await walk(from);
+  let removed = 0;
+  const prune = async (dir: string): Promise<void> => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!SKIP_DIRS.has(entry.name)) await prune(path);
+        continue;
+      }
+      if (!files.has(path.slice(to.length + 1))) {
+        await unlink(path);
+        removed++;
+      }
+    }
+  };
+  await prune(to);
+  return { written, removed };
+}
+
+async function sameContent(a: string, b: string, link: boolean): Promise<boolean> {
+  try {
+    const [sa, sb] = await Promise.all([lstat(a), lstat(b)]);
+    if (link || sa.isSymbolicLink() || sb.isSymbolicLink()) return sa.isSymbolicLink() && sb.isSymbolicLink() && (await readlink(a)) === (await readlink(b));
+    if (sa.size !== sb.size || (sa.mode & 0o111) !== (sb.mode & 0o111)) return false;
+    const [ha, hb] = await Promise.all([a, b].map(async (p) => createHash("sha256").update(await readFile(p)).digest("hex")));
+    return ha === hb;
+  } catch {
+    return false;
+  }
+}
+
+/** The .app at the upload's top, or in its one top folder: what app_control install takes. */
+async function appIn(root: string): Promise<string | undefined> {
+  const top = await readdir(root, { withFileTypes: true });
+  const app = top.find((e) => e.isDirectory() && e.name.endsWith(".app"));
+  if (app) return join(root, app.name);
+  const folders = top.filter((e) => e.isDirectory() && !e.name.startsWith("."));
+  if (folders.length !== 1) return undefined;
+  const inner = (await readdir(join(root, folders[0]!.name), { withFileTypes: true })).find((e) => e.isDirectory() && e.name.endsWith(".app"));
+  return inner ? join(root, folders[0]!.name, inner.name) : undefined;
+}
+
 // ---- The pool's warm-up -----------------------------------------------------------------------------------
 
 const WARM_BUNDLE = "app.nomac.prewarm";
@@ -389,6 +612,10 @@ export async function hosted(method: string, params: Record<string, unknown>): P
       return get(params);
     case "simulator-use/warm":
       return warm(params);
+    case "simulator-use/clone":
+      return clone(params);
+    case "simulator-use/fetch":
+      return fetchUpload(params);
     case "simulator-use/sync":
       if (params.op === "manifest") return manifest(params);
       if (params.op === "place") return place(params);

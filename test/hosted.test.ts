@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { hosted, hostedText, setAnswerWithin } from "../src/hosted.ts";
+import { gitEnv, gitUrl, hosted, hostedText, setAnswerWithin } from "../src/hosted.ts";
 
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 const project = "prj_" + "f".repeat(32);
@@ -210,4 +210,91 @@ test("the pool's warm-up runs only before the hand-over, and a stop with none ru
   await hosted("simulator-use/configure", { workspace: mkdtempSync(join(tmpdir(), "su-ws-")) });
   await assert.rejects(hosted("simulator-use/warm", {}), /the warm-up runs before the hand-over/);
   assert.deepEqual(await hosted("simulator-use/warm", { stop: true }), { ok: true, ms: 0, stopped: false });
+});
+
+test("a repository comes only by an https link without credentials, and its token only through git's environment", async () => {
+  assert.equal(gitUrl("https://github.com/NoMac-app/simulator-use"), true);
+  assert.equal(gitUrl("https://github.com/NoMac-app/simulator-use.git"), true);
+  for (const bad of ["http://github.com/a/b", "git@github.com:a/b.git", "file:///etc", "https://user:token@github.com/a/b", "https://github.com/", "https://github.com/a/b?x=1", "https://github.com/a b", "ssh://github.com/a/b", "--upload-pack=x"]) {
+    assert.equal(gitUrl(bad), false, bad);
+  }
+  const env = gitEnv("https://github.com/a/b", "ghp_secret");
+  assert.equal(env.GIT_TERMINAL_PROMPT, "0");
+  assert.equal(env.GIT_CONFIG_KEY_0, "http.https://github.com/.extraHeader");
+  assert.equal(env.GIT_CONFIG_VALUE_0, `Authorization: Basic ${Buffer.from("x-access-token:ghp_secret").toString("base64")}`);
+  assert.equal(gitEnv("https://gitlab.com/a/b", "t").GIT_CONFIG_VALUE_0, `Authorization: Basic ${Buffer.from("oauth2:t").toString("base64")}`);
+  assert.equal(gitEnv("https://github.com/a/b", undefined).GIT_CONFIG_COUNT, undefined);
+  const id = `clone_${"a".repeat(40)}`;
+  await assert.rejects(hosted("simulator-use/clone", { id, url: "http://github.com/a/b" }), /https link/);
+  await assert.rejects(hosted("simulator-use/clone", { id, url: "https://github.com/a/b", ref: "--upload-pack=touch" }), /ref/);
+  await assert.rejects(hosted("simulator-use/clone", { id: "clone_x", url: "https://github.com/a/b" }), /clone id/);
+});
+
+test("an uploaded project or .app is unpacked into the workspace, only what differs moved in", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "su-ws-"));
+  await hosted("simulator-use/configure", { workspace });
+  const project = mkdtempSync(join(tmpdir(), "su-up-"));
+  mkdirSync(join(project, "Sources"));
+  writeFileSync(join(project, "Sources/A.swift"), "let a = 1\n");
+  writeFileSync(join(project, "Sources/B.swift"), "let b = 1\n");
+  const packed = (tgz: string, ...paths: string[]) => {
+    spawnSync("tar", [...(process.platform === "darwin" ? ["--no-mac-metadata"] : []), "-czf", tgz, "-C", project, ...paths], { env: { ...process.env, COPYFILE_DISABLE: "1" } });
+    const data = readFileSync(tgz);
+    return { data, sha256: createHash("sha256").update(data).digest("hex") };
+  };
+  const realFetch = globalThis.fetch;
+  let body = Buffer.alloc(0);
+  globalThis.fetch = (async () => new Response(new Uint8Array(body))) as typeof fetch;
+  const fetchOnce = async (n: string, sha256: string, name = "demo") => {
+    let answer: Record<string, unknown>;
+    do answer = (await hosted("simulator-use/fetch", { id: `fetch_${n.repeat(40)}`, url: "https://r2.example.test/get", sha256, name })) as Record<string, unknown>;
+    while (answer.state === "running");
+    return answer;
+  };
+  try {
+    const first = packed(join(project, "..", "first.tgz"), "Sources");
+    body = first.data;
+    const one = await fetchOnce("1", first.sha256);
+    assert.equal(one.state, "done", String(one.error));
+    assert.equal(one.written, 2);
+    const root = String(one.root);
+    assert.match(root, /\/src\/upload_[a-f0-9]{32}$/);
+    mkdirSync(join(root, "DerivedData"));
+    writeFileSync(join(root, "DerivedData/kept.o"), "x");
+    const before = statSync(join(root, "Sources/A.swift")).mtimeMs;
+    // Next upload: B changed, A the same, a new C; B's old self goes, A keeps its mtime, build output stays.
+    writeFileSync(join(project, "Sources/B.swift"), "let b = 2\n");
+    writeFileSync(join(project, "Sources/C.swift"), "let c = 3\n");
+    const second = packed(join(project, "..", "second.tgz"), "Sources/A.swift", "Sources/B.swift", "Sources/C.swift");
+    body = second.data;
+    const two = await fetchOnce("2", second.sha256);
+    assert.equal(two.state, "done", String(two.error));
+    assert.equal(two.written, 2);
+    assert.equal(two.removed, 0);
+    assert.equal(statSync(join(root, "Sources/A.swift")).mtimeMs, before);
+    assert.equal(readFileSync(join(root, "Sources/B.swift"), "utf8"), "let b = 2\n");
+    assert.equal(existsSync(join(root, "DerivedData/kept.o")), true);
+    const third = packed(join(project, "..", "third.tgz"), "Sources/A.swift");
+    body = third.data;
+    const three = await fetchOnce("3", third.sha256);
+    assert.equal(three.removed, 2);
+    assert.equal(existsSync(join(root, "Sources/C.swift")), false);
+    const wrong = await fetchOnce("5", "0".repeat(64), "other");
+    assert.equal(wrong.state, "failed");
+    assert.match(String(wrong.error), /^upload_checksum_mismatch/);
+    await assert.rejects(hosted("simulator-use/fetch", { id: `fetch_${"6".repeat(40)}`, url: "https://r2.example.test/get", sha256: first.sha256, name: "../x" }), /name/);
+    // A zip with a .app inside its one folder: the app's path comes back for app_control install (ditto, on a Mac).
+    if (process.platform !== "darwin") return;
+    const appDir = mkdtempSync(join(tmpdir(), "su-app-"));
+    mkdirSync(join(appDir, "Build/Demo.app"), { recursive: true });
+    writeFileSync(join(appDir, "Build/Demo.app/Info.plist"), "<plist/>");
+    const zip = join(appDir, "demo.zip");
+    spawnSync("/usr/bin/ditto", ["-c", "-k", join(appDir, "Build"), zip]);
+    body = readFileSync(zip);
+    const app = await fetchOnce("4", createHash("sha256").update(body).digest("hex"), "demo-app");
+    assert.equal(app.state, "done", String(app.error));
+    assert.match(String(app.app), /\/src\/upload_[a-f0-9]{32}\/Demo\.app$/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
