@@ -81,6 +81,8 @@ The MCP server and the CLI are built from one list, so they always match. The to
 
 `app_run` does the whole loop in one call: it finds the project (a workspace first, then a project, an XcodeGen spec, or `ios/`), picks the scheme, builds for the Simulator, installs, launches, and answers with the first screen.
 
+The app's permissions are granted when it is installed and its first launch's prompts (notifications too) are answered, so no prompt stops the agent; `permissions: "ask"` keeps iOS's prompts, to test them. `open_url` answers iOS's "Open in …?" for a link that opens another app.
+
 ```
 Built Demo in 4.2 s, installed dev.simtap.demo.
 Launched Demo in 3.9 s.

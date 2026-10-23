@@ -3,6 +3,7 @@ import { answer, claimProject, currentJob, startJob } from "../engine/jobs.ts";
 import { bootDevice, findDevice, listDevices, pickDevice, type Device } from "../engine/simctl.ts";
 import { heldDevice, holdDevice } from "../engine/state.ts";
 import { build, builtApp, formatIssue, knownFix, projectFor, remember } from "../engine/xcode.ts";
+import { grantAll, setPermissionMode } from "../engine/prompts.ts";
 import { ToolError } from "../errors.ts";
 import { launchAndLook } from "./launch-app.ts";
 import type { Tool } from "./types.ts";
@@ -41,6 +42,7 @@ export const appRun: Tool = {
       configuration: { type: "string", enum: ["Debug", "Release"], description: "Default: Debug" },
       clean: { type: "boolean", description: "Build from scratch" },
       device: { type: "string", description: "Name or UDID; default: the one in use" },
+      permissions: { type: "string", enum: ["grant", "ask"], description: "grant (default): every permission granted and first-launch prompts answered; ask: iOS's prompts stay, to test them" },
     },
     additionalProperties: false,
   },
@@ -88,10 +90,13 @@ export const appRun: Tool = {
       const bundleId = await bundleIdOf(app);
       await install(device.udid, app);
       await remember(dir, { project: project.path, scheme, bundleId });
+      // Granted by default, so no prompt stops the agent; "ask" leaves iOS's prompts for a test of them.
+      const refused = args.permissions === "ask" ? (await setPermissionMode(device.udid, bundleId, "ask"), undefined) : await grantAll(device.udid, bundleId);
       progress.step("launching");
       const look = await launchAndLook(device, bundleId);
       const made = project.generated ? ` (generated ${project.name}.xcodeproj with XcodeGen first)` : "";
-      return { text: `${note}Built ${scheme} in ${seconds} s${result.warnings ? ` with ${result.warnings} warnings` : ""}${made}, installed ${bundleId}.\n${look}` };
+      const grant = refused ? `\nIts permissions could not be granted (${refused}).` : "";
+      return { text: `${note}Built ${scheme} in ${seconds} s${result.warnings ? ` with ${result.warnings} warnings` : ""}${made}, installed ${bundleId}.${grant}\n${look}` };
     });
 
     return answer(job, context.waitForJobs);

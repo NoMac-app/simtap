@@ -2,11 +2,13 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import { appInfo, launch, startLogStream } from "../engine/apps.ts";
 import { AccessibilityStarting } from "../engine/axe.ts";
+import { permissionMode, permissionPrompt } from "../engine/prompts.ts";
 import type { Device } from "../engine/simctl.ts";
 import { setCurrentApp } from "../engine/state.ts";
 import { ToolError } from "../errors.ts";
 import { readScreen } from "../look/read.ts";
-import { render } from "../look/snapshot.ts";
+import { render, type Snapshot } from "../look/snapshot.ts";
+import { uiAct } from "./ui-act.ts";
 
 /** How long launch waits for the app to come to the front, then after a second launch: within the 45 s of a call. */
 const FRONT_WAIT_MS = 12_000;
@@ -56,12 +58,28 @@ export async function launchAndLook(device: Device, bundleId: string): Promise<s
       if (render(next) === render(snap)) break;
       snap = next;
     }
+    // An app run with its permissions granted gets its first launch's prompts answered (notifications have no
+    // simctl grant); app_run with permissions: "ask" leaves them, for testing them.
+    const answered: string[] = [];
+    if ((await permissionMode(device.udid, bundleId)) === "grant") {
+      for (let prompt = permissionPrompt(snap, name); prompt && answered.length < 3; prompt = permissionPrompt(snap, name)) {
+        snap = await tapPrompt(device, prompt.allow);
+        answered.push(`"${prompt.title}" (${prompt.allow})`);
+      }
+    }
+    const prompts = answered.length ? `\nAnswered iOS's prompt${answered.length > 1 ? "s" : ""} ${answered.join(", ")}; app_run with permissions: "ask" keeps them.` : "";
     const late = front(snap.app) ? "" : `\n${name} is not in front yet.\nNext: ui_look shortly, or launch again.`;
-    return `${launched()}${again}.${late}\n${render(snap, { device: label })}`;
+    return `${launched()}${again}.${prompts}${late}\n${render(snap, { device: label })}`;
   } catch (error) {
     // The launch worked; only reading the screen isn't possible yet (a first boot's accessibility service took
     // over 35 s on a fresh Xcode 27 Mac). That is not a failed launch.
     if (!(error instanceof AccessibilityStarting)) throw error;
     return `${launched()}. Its screen can't be read yet: the Simulator's accessibility service is still starting, as it does for a minute or two after a first boot.\nNext: ui_look in 30 seconds.`;
   }
+}
+
+/** Taps one button of an iOS prompt the way ui_act taps (its lock, its settle), and reads the screen after. */
+export async function tapPrompt(device: Device, label: string): Promise<Snapshot> {
+  await uiAct.run({ steps: [`tap "${label}"`], device: device.udid }, { waitForJobs: false });
+  return (await readScreen(device.udid)).snap;
 }

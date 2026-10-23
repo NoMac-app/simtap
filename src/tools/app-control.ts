@@ -7,7 +7,8 @@ import { currentApp, heldDevice, setCurrentApp } from "../engine/state.ts";
 import { ToolError } from "../errors.ts";
 import { readScreen } from "../look/read.ts";
 import { render } from "../look/snapshot.ts";
-import { launchAndLook } from "./launch-app.ts";
+import { grantAll, openInPrompt, setPermissionMode } from "../engine/prompts.ts";
+import { launchAndLook, tapPrompt } from "./launch-app.ts";
 import type { Tool } from "./types.ts";
 
 const ACTIONS = ["launch", "install", "terminate", "uninstall", "open_url", "grant", "revoke", "reset_permissions", "location", "push"];
@@ -74,7 +75,9 @@ export const appControl: Tool = {
       await install(device.udid, path);
       const info = await appInfo(device.udid, bundleId);
       await setCurrentApp(device.udid, { bundleId, executable: info?.executable });
-      return { text: `Installed ${info?.name ?? bundleId} (${bundleId}) on ${label}. Next: app_control {action: "launch"}.` };
+      const refused = await grantAll(device.udid, bundleId);
+      const granted = refused ? ` Its permissions could not be granted (${refused}).` : " Its permissions are granted, so no prompt stops it (reset_permissions brings iOS's prompts back).";
+      return { text: `Installed ${info?.name ?? bundleId} (${bundleId}) on ${label}.${granted} Next: app_control {action: "launch"}.` };
     }
 
     // Every other action works on an installed app: the one named, or the one launched last.
@@ -95,16 +98,24 @@ export const appControl: Tool = {
         await stopLogStream(device.udid, bundleId!);
         await simctlAction(["uninstall", device.udid, bundleId!], `remove ${bundleId}`);
         return { text: `Removed ${bundleId} and its data from ${label}.` };
-      case "open_url":
+      case "open_url": {
         await simctlAction(["openurl", device.udid, value!], `open ${value}`);
-        return { text: `Opened ${value}.\n${render((await readScreen(device.udid)).snap, { device: label })}` };
+        let snap = (await readScreen(device.udid)).snap;
+        // A link that opens another app makes iOS ask "Open in “App”?": the agent asked for exactly that.
+        const asked = openInPrompt(snap);
+        if (asked) snap = await tapPrompt(device, "Open");
+        return { text: `Opened ${value}.${asked ? ` iOS asked "${asked}": answered Open.` : ""}\n${render(snap, { device: label })}` };
+      }
       case "grant":
       case "revoke":
         if (!PERMISSIONS.includes(value!)) throw new ToolError(`Unknown permission "${value}".`, `Permissions: ${PERMISSIONS.join(", ")}.`);
         await simctlAction(["privacy", device.udid, action, value!, bundleId!], `${action} ${value}`);
+        // A permission taken away is for testing iOS's prompt: launches stop answering prompts for this app.
+        if (action === "revoke") await setPermissionMode(device.udid, bundleId!, "ask");
         return { text: `${action === "grant" ? "Granted" : "Revoked"} ${value} for ${bundleId}. The app may have been stopped: iOS does that when a permission changes.` };
       case "reset_permissions":
         await simctlAction(["privacy", device.udid, "reset", value ?? "all", ...(bundleId ? [bundleId] : [])], "reset permissions");
+        if (bundleId) await setPermissionMode(device.udid, bundleId, "ask");
         return { text: `Reset ${value ?? "all"} permissions${bundleId ? ` for ${bundleId}` : ""}: the app asks again on next use.` };
       case "location": {
         if (value!.trim() === "clear") {
