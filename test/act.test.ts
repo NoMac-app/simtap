@@ -69,6 +69,26 @@ test("an ambiguous label lists the candidates instead of guessing", () => {
   assert.equal(many.ambiguous, true);
 });
 
+test("a partial label is words of its own, never the opposite: tap Allow is not Don’t Allow", () => {
+  const frame = { x: 0, y: 0, width: 10, height: 10 };
+  const prompt = (...labels: string[]) => ({ app: "Demo · system alert", elements: labels.map((label, i) => ({ kind: "button", label, x: 100 + i, y: 500, frame })), tabs: [], keyboard: false, hidden: { above: 0, below: 0, left: 0, right: 0 }, unreadable: [], screen: { x: 0, y: 0, width: 402, height: 874 }, modal: "alert" as const });
+  const tap = (snap: ReturnType<typeof prompt>, label: string) => {
+    const r = resolve(snap, { by: "label", label });
+    return isResolved(r) ? r.element?.label : r.error;
+  };
+  // iOS's contacts prompt: Don’t Allow and Continue. There is no Allow to tap.
+  assert.equal(tap(prompt("Don’t Allow", "Continue"), "Allow"), 'No "Allow" on screen.');
+  assert.equal(tap(prompt("Don't Allow", "OK"), "allow"), 'No "allow" on screen.');
+  assert.equal(tap(prompt("Do Not Allow", "OK"), "Allow"), 'No "Allow" on screen.');
+  assert.equal(tap(prompt("Disallow", "OK"), "Allow"), 'No "Allow" on screen.');
+  assert.equal(tap(prompt("Not Now", "Turn On"), "Now"), 'No "Now" on screen.');
+  // Words of the label still match, in any place.
+  assert.equal(tap(prompt("Allow While Using App", "Don’t Allow"), "Allow"), "Allow While Using App");
+  assert.equal(tap(prompt("Count: 2, Increment", "Count: 2, Decrement"), "Increment"), "Count: 2, Increment");
+  assert.equal(tap(prompt("Don’t Allow", "Allow"), "Allow"), "Allow", "the exact label first");
+  assert.equal(tap(prompt("Email address", "Send"), "mail"), 'No "mail" on screen.', "part of a word is not a word");
+});
+
 test("a target hidden below points to scrolling", () => {
   const r = resolve(screen("items"), { by: "label", label: "Item 13" });
   assert.ok(!isResolved(r));

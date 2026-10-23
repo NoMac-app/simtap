@@ -206,7 +206,9 @@ async function act(udid: string, deviceLabel: string, lines: string[], called: n
       case "tap": {
         const r = await locate(step.target);
         const was = render(snap);
+        const tapped = Date.now();
         await batch(udid, [tapStep(r)]);
+        if (setting("DEBUG")) process.stderr.write(`simulator-use:   tap ${Date.now() - tapped} ms\n`);
         field = r.element && FIELDS.has(r.element.kind) ? r.element : undefined;
         if (field) {
           stale = true;

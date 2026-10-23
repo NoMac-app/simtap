@@ -4,11 +4,30 @@ import { describeTarget, type Target } from "./steps.ts";
 /** Kinds a person taps, preferred over plain text with the same label. */
 const TAPPABLE = new Set(["button", "back", "link", "cell", "tab", "switch", "checkbox", "radio", "textfield", "securefield", "searchfield", "textview", "popup", "menu", "segmented", "picker", "slider", "stepper"]);
 
+/** Words that turn a label into the opposite of the target that follows them: "Don’t Allow" is not "Allow". */
+const NEGATED = /(?:^|[^\p{L}\p{N}])(?:don['’]?t|do not|not|never|no)\s+$/iu;
+
+/**
+ * Whether a label holds the target as words of its own, not negated: "Allow" is in "Allow While Using App" and
+ * "Count: 2, Increment" holds "Increment", but "Don’t Allow" and "Disallow" do not hold "Allow" (an agent's
+ * "tap Allow" on a prompt whose buttons are "Don’t Allow" and "Continue" tapped Don’t Allow, October 23).
+ */
+function holds(label: string, want: string): boolean {
+  const word = /^[\p{L}\p{N}]/u.test(want);
+  for (let at = label.indexOf(want); at >= 0; at = label.indexOf(want, at + 1)) {
+    const before = label.slice(0, at);
+    if ((word && /[\p{L}\p{N}]$/u.test(before)) || NEGATED.test(before)) continue;
+    return true;
+  }
+  return false;
+}
+
 export type Resolved = { element?: Element; x: number; y: number };
 export type Unresolved = { error: string; next: string; ambiguous?: boolean };
 
 /**
- * Finds a target on the screen: by #id exactly; by label exactly (any case), then by a unique partial match;
+ * Finds a target on the screen: by #id exactly; by label exactly (any case), then by a unique partial match (the
+ * target as words of the label, not negated);
  * or a point as given. Ties go to tappable elements; a tie that remains is an error listing the candidates.
  */
 export function resolve(snap: Snapshot, target: Target): Resolved | Unresolved {
@@ -21,7 +40,7 @@ export function resolve(snap: Snapshot, target: Target): Resolved | Unresolved {
     const want = target.label.toLowerCase();
     const ofKind = target.kind ? all.filter((e) => e.kind === target.kind) : all;
     found = ofKind.filter((e) => e.label?.toLowerCase() === want);
-    if (!found.length) found = ofKind.filter((e) => e.label?.toLowerCase().includes(want) || e.value?.toLowerCase() === want);
+    if (!found.length) found = ofKind.filter((e) => (e.label !== undefined && holds(e.label.toLowerCase(), want)) || e.value?.toLowerCase() === want);
   }
   if (found.length > 1) {
     const tappable = found.filter((e) => TAPPABLE.has(e.kind));

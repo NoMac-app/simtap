@@ -2,6 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import { AccessibilityStarting, describeUi } from "../engine/axe.ts";
 import { engineCall } from "../engine/native.ts";
+import { setting } from "../settings.ts";
 import { type AxNode, render, type Snapshot, snapshot } from "./snapshot.ts";
 
 /** Right after a launch the app's accessibility tree is empty for a moment (seen on Xcode 27). */
@@ -54,13 +55,17 @@ export async function settle(udid: string, fromApp?: string): Promise<{ snap: Sn
   // With the engine: the screen buffer says when the screen stopped changing (up to 0.8 s for the first change
   // after an input, then 150 ms without one), and one read follows; a newly opened app's shell is read again
   // until its contents arrive (up to 2.5 s).
+  const started = Date.now();
   const answer = await engineCall(udid, { op: "settle", first_change_ms: 800, quiet_ms: 150, timeout_ms: SETTLE_TIMEOUT_MS }, SETTLE_TIMEOUT_MS + 5_000);
   if (answer?.ok) {
+    const quiet = Date.now();
     let snap = (await readScreen(udid, false)).snap;
-    for (const deadline = Date.now() + 2_500; opening(snap, fromApp) && Date.now() < deadline; ) {
+    let reads = 1;
+    for (const deadline = Date.now() + 2_500; opening(snap, fromApp) && Date.now() < deadline; reads++) {
       await sleep(300);
       snap = (await readScreen(udid, false)).snap;
     }
+    if (setting("DEBUG")) process.stderr.write(`simulator-use:   settle ${quiet - started} ms${answer.settled === false ? " (still changing)" : ""}, ${reads} read(s) ${Date.now() - quiet} ms\n`);
     return { snap, settled: answer.settled !== false };
   }
   const deadline = Date.now() + SETTLE_TIMEOUT_MS;
