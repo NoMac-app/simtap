@@ -23,6 +23,9 @@ const ALLOWING = ["Allow", "Allow While Using App", "Allow Full Access", "OK"];
 const alertOf = (snap: Snapshot) => (snap.modal === "alert" ? snap.elements.find((e) => e.kind === "alert" && e.label) : undefined);
 const button = (snap: Snapshot, label: string) => snap.elements.some((e) => e.kind === "button" && e.label === label);
 
+/** The title of the alert in front, or nothing. */
+export const alertTitle = (snap: Snapshot): string | undefined => alertOf(snap)?.label;
+
 /** iOS's "Open in “App”?" in front, with its Open button: the title, or nothing. */
 export function openInPrompt(snap: Snapshot): string | undefined {
   const alert = alertOf(snap);

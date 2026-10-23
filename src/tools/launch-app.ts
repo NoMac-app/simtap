@@ -2,11 +2,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import { appInfo, launch, startLogStream } from "../engine/apps.ts";
 import { AccessibilityStarting } from "../engine/axe.ts";
-import { permissionMode, permissionPrompt } from "../engine/prompts.ts";
+import { alertTitle, permissionMode, permissionPrompt } from "../engine/prompts.ts";
 import type { Device } from "../engine/simctl.ts";
 import { setCurrentApp } from "../engine/state.ts";
 import { ToolError } from "../errors.ts";
-import { readScreen } from "../look/read.ts";
+import { readScreen, settle } from "../look/read.ts";
 import { render, type Snapshot } from "../look/snapshot.ts";
 import { uiAct } from "./ui-act.ts";
 
@@ -78,8 +78,18 @@ export async function launchAndLook(device: Device, bundleId: string): Promise<s
   }
 }
 
-/** Taps one button of an iOS prompt the way ui_act taps (its lock, its settle), and reads the screen after. */
+/**
+ * Taps one button of an iOS prompt the way ui_act taps (its lock, its settle), and reads the screen after. The
+ * prompt is let finish coming up first, and tapped again while it is still in front: on iOS 27 a tap as "Open in
+ * “EdgeLab”?" appeared was lost, and the prompt stayed (Texas, October 23).
+ */
 export async function tapPrompt(device: Device, label: string): Promise<Snapshot> {
-  await uiAct.run({ steps: [`tap "${label}"`], device: device.udid }, { waitForJobs: false });
-  return (await readScreen(device.udid)).snap;
+  let snap = (await settle(device.udid)).snap;
+  const title = alertTitle(snap);
+  for (let attempt = 0; attempt < 3 && title !== undefined && alertTitle(snap) === title; attempt++) {
+    await uiAct.run({ steps: [`tap "${label}"`], device: device.udid }, { waitForJobs: false });
+    snap = (await readScreen(device.udid)).snap;
+    if (alertTitle(snap) === title) snap = (await settle(device.udid)).snap;
+  }
+  return snap;
 }
