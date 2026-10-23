@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, readFileSync, writeSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import { parseArgs } from "../src/cli.ts";
-import { plistValue } from "../src/engine/apps.ts";
+import { freshFile, plistValue } from "../src/engine/apps.ts";
 import { cleanConsole, parseSystemLog, summarizeIps } from "../src/engine/logs.ts";
 import { appControl, pushJson } from "../src/tools/app-control.ts";
 import { parseSince } from "../src/tools/app-logs.ts";
@@ -81,4 +83,19 @@ test("the CLI reads app_control the way people type it", () => {
   assert.deepEqual(parseArgs(appControl, ["grant", "photos", "--app", "dev.example.app"]), { action: "grant", value: "photos", app: "dev.example.app" });
   assert.deepEqual(parseArgs(appControl, ["location", "47.4979,19.0402"]), { action: "location", value: "47.4979,19.0402" });
   assert.match(String(parseArgs(appControl, ["push", "hi", "extra"])), /Unexpected "extra"/);
+});
+
+test("a relaunch's console file holds only the new launch's lines, while the old launcher still writes", () => {
+  // October 23: the old launcher kept writing at its offset into the truncated file, leaving NUL bytes.
+  const file = join(mkdtempSync(join(tmpdir(), "su-console-")), "dev.example.app.console.log");
+  const old = openSync(file, "w");
+  writeSync(old, "the first launch printed this line\n");
+  const fresh = freshFile(file);
+  writeSync(fresh, "second launch\n");
+  writeSync(old, "the first launch ending\n");
+  closeSync(old);
+  closeSync(fresh);
+  const text = readFileSync(file, "utf8");
+  assert.equal(text, "second launch\n");
+  assert.equal(text.includes("\0"), false);
 });

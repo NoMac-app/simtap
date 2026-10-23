@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -55,13 +55,27 @@ export async function consoleFile(udid: string, bundleId: string): Promise<strin
 }
 
 /**
+ * A new, empty file at path, open for writing. The previous launch's launcher can still write to the old file at
+ * its own offset: truncating that file left NUL bytes before the next line (October 23). So the old file goes and a
+ * new one is made; the old writer keeps writing into a file no one reads.
+ */
+export function freshFile(path: string): number {
+  try {
+    unlinkSync(path);
+  } catch {
+    // None yet.
+  }
+  return openSync(path, "w");
+}
+
+/**
  * Launches fresh (any running copy is stopped) and keeps the app's print() output for app_logs.
  * simctl's --stdout wrote nothing on iOS 26.5, so a detached `simctl launch --console-pty` holds the app's
  * output instead, writing to a file until the app ends; NSUnbufferedIO is what Xcode sets so lines arrive at once.
  */
 export async function launch(udid: string, bundleId: string): Promise<void> {
   const file = await consoleFile(udid, bundleId);
-  const fd = openSync(file, "w");
+  const fd = freshFile(file);
   const child = spawn("xcrun", ["simctl", "launch", "--console-pty", "--terminate-running-process", udid, bundleId], {
     detached: true,
     stdio: ["ignore", fd, fd],
