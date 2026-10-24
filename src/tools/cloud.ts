@@ -14,7 +14,7 @@ import type { CallContext, Tool, ToolResult } from "./types.ts";
 const READY_WAIT_MS = 40_000;
 const ACTIONS = ["start", "status", "stop", "run"];
 
-type Phone = { id: string; state: string; ready_at?: string | null; failure_code?: string | null; cost?: { accrued_microunits?: string; billable_seconds?: number }; cleanup_confirmed?: boolean };
+type Phone = { id: string; state: string; message?: string; ready_at?: string | null; failure_code?: string | null; cost?: { accrued_microunits?: string; billable_seconds?: number }; cleanup_confirmed?: boolean };
 /** A phone answer's links: view and control while it runs, its replay always. */
 type Links = { view?: string; control?: string; replay?: string };
 
@@ -55,7 +55,9 @@ async function start(context: CallContext): Promise<ToolResult> {
       await setCloudState({ on: false });
       throw new ToolError(`The cloud phone did not start: ${phone.failure_code ?? phone.state}.`, "Call cloud start again; report_issue on NoMac's MCP if it keeps failing.");
     }
-    return { text: `The cloud phone ${id} is still starting after ${((Date.now() - started) / 1000).toFixed(0)} s.\nNext: cloud status, or any tool: it waits for the phone.` };
+    // Waiting for a free phone, NoMac says how many there are and its place.
+    const why = phone.state === "queued" && phone.message ? ` ${phone.message}` : "";
+    return { text: `The cloud phone ${id} is still starting after ${((Date.now() - started) / 1000).toFixed(0)} s.${why}\nNext: cloud status, or any tool: it waits for the phone.` };
   }
   const links = (created.links ?? {}) as Links;
   const watch = links.view && links.control ? `\nA person can watch it at ${links.view} or use it at ${links.control}.` : "";
@@ -69,6 +71,7 @@ async function status(): Promise<ToolResult> {
   if (!api || !state.session) return { text: "Cloud is on but has no phone yet. cloud start starts one." };
   const phone = await phoneOf(api, state.session);
   const minutes = Math.ceil((phone.cost?.billable_seconds ?? 0) / 60);
+  if (phone.state === "queued") return { text: `Cloud is on: phone ${phone.id} is waiting.${phone.message ? ` ${phone.message}` : ""}` };
   return { text: `Cloud is on: phone ${phone.id} is ${phone.state}; ${minutes} min so far, ${dollars(phone.cost?.accrued_microunits)} at $0.80 an hour.` };
 }
 

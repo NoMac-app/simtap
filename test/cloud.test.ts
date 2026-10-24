@@ -68,7 +68,8 @@ before(async () => {
     if (req.method === "POST" && path === "/api/v1/simulator/sessions") return send(202, { session: { id: "ses_phone", state: "queued" }, links: { view: "https://nomac.app/simulator-use/view/w.x", control: "https://nomac.app/simulator-use/view/c.x", expires_at: "2026-10-24T12:00:00.000Z", replay: "https://nomac.app/simulator-use/replay/r.x" } });
     if (req.method === "GET" && path === "/api/v1/simulator/sessions/ses_phone") {
       if (phoneState === "gone") return send(409, { error: { code: "session_not_ready", message: "not running" } });
-      return send(200, { session: { id: "ses_phone", state: phoneState, cost: { accrued_microunits: "26667", billable_seconds: 120 }, cleanup_confirmed: phoneState === "stopped" } });
+      const queued = phoneState === "queued" ? { message: "Every phone is in use: NoMac Simulator runs 2 at once, and it is next." } : {};
+      return send(200, { session: { id: "ses_phone", state: phoneState, ...queued, cost: { accrued_microunits: "26667", billable_seconds: 120 }, cleanup_confirmed: phoneState === "stopped" } });
     }
     if (req.method === "DELETE" && path === "/api/v1/simulator/sessions/ses_phone") { phoneState = "stopped"; return send(202, { session: { id: "ses_phone", state: "stopping" }, links: { replay: "https://nomac.app/simulator-use/replay/r.x" } }); }
     if (path === "/api/v1/simulator/sessions/ses_phone/sync") {
@@ -128,6 +129,10 @@ test("cloud start, then every tool on the phone: app_run sends the project first
   assert.match((await callTool("cloud", { action: "status" })).text, /^Cloud is on but has no phone yet/);
   assert.match((await callTool("cloud", { action: "start" })).text, /^Cloud phone ready/);
 
+  // A phone waiting for a free one says where it is in line.
+  phoneState = "queued";
+  assert.match((await callTool("cloud", { action: "status" })).text, /^Cloud is on: phone ses_phone is waiting\. Every phone is in use: NoMac Simulator runs 2 at once, and it is next\.$/);
+  phoneState = "ready";
   const stopped = await callTool("cloud", { action: "stop" });
   assert.match(stopped.text, /The tools run on this machine again/);
   assert.match(stopped.text, /Its replay, the screen and every call, opens at https:\/\/nomac\.app\/simulator-use\/replay\/r\.x in a minute \(kept 7 days\)\./);
