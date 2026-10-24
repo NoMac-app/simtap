@@ -8,6 +8,7 @@ import { after, before, test } from "node:test";
 import { existsSync } from "node:fs";
 
 import { parseArgs } from "../src/cli.ts";
+import { withSource } from "../src/cloud/account.ts";
 import { listProject, normalizeRemote, pages, projectId } from "../src/cloud/sync.ts";
 import { callTool, TOOLS } from "../src/registry.ts";
 
@@ -61,6 +62,8 @@ before(async () => {
     const body = req.headers["content-type"] === "application/json" && raw.length ? JSON.parse(raw.toString()) : raw.length;
     seen.push({ method: req.method ?? "", path, body, key: req.headers["idempotency-key"] as string | undefined });
     const send = (status: number, value: unknown) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(value)); };
+    // A file link needs no key: the link is the permission.
+    if (path === "/api/v1/simulator/files/rec.tok") { res.writeHead(200, { "content-type": "video/mp4" }); res.end("mp4"); return; }
     if (req.headers.authorization !== "Bearer nmk_test") return send(401, { error: { code: "unauthorized", message: "no" } });
     if (req.method === "POST" && path === "/api/v1/simulator/sessions") return send(202, { session: { id: "ses_phone", state: "queued" } });
     if (req.method === "GET" && path === "/api/v1/simulator/sessions/ses_phone") {
@@ -79,6 +82,7 @@ before(async () => {
       return send(200, { id: "call_1", state: "running" });
     }
     if (path === "/api/v1/simulator/sessions/ses_phone/tools/tests_run") return send(200, { id: "call_2", state: "done", result: { content: [{ type: "text", text: "3 tests passed in 9.6 s." }] } });
+    if (path === "/api/v1/simulator/sessions/ses_phone/tools/screen_record") return send(200, { id: "call_4", state: "done", result: { content: [{ type: "text", text: (body as { action: string }).action === "start" ? "Recording iPhone 17 Pro." : `Recorded 12 s (1 MB): http://127.0.0.1:${(server.address() as { port: number }).port}/api/v1/simulator/files/rec.tok` }] } });
     if (path === "/api/v1/simulator/sessions/ses_phone/tools/ui_look") return send(200, { id: "call_3", state: "done", result: { content: [{ type: "text", text: "Demo · Sign In" }, { type: "image", data: Buffer.from("jpeg").toString("base64"), mimeType: "image/jpeg" }] } });
     if (path === "/api/v1/simulator/sessions/ses_phone/calls/call_1") return send(200, { id: "call_1", state: "done", result: { content: [{ type: "text", text: "Built Demo in 1.2 s, installed dev.simtap.demo.\nFull log: https://nomac.app/api/v1/simulator/files/x.y" }] } });
     send(404, { error: { code: "not_found", message: path } });
@@ -142,7 +146,14 @@ test("cloud run is CI in one line: start, build and run, the tests, a screenshot
   assert.match(ran.text, /3 tests passed in 9\.6 s\./);
   const shot = /Screenshot: (\S+)/.exec(ran.text)?.[1];
   assert.ok(shot && shot.startsWith(out) && existsSync(shot), ran.text);
+  const video = /Recording: (\S+)/.exec(ran.text)?.[1];
+  assert.ok(video && video.startsWith(out) && video.endsWith(".mp4") && existsSync(video), ran.text);
   assert.match(ran.text, /Stopped the cloud phone/);
   assert.match((await callTool("cloud", { action: "status" })).text, /^Cloud is off/);
+});
+
+test("the sign-in link names simulator-use as its source", () => {
+  assert.equal(withSource("https://nomac.app/device?code=WXYZ-2345"), "https://nomac.app/device?code=WXYZ-2345&utm_source=simulator-use");
+  assert.equal(withSource("not a link"), "not a link");
 });
 

@@ -186,12 +186,12 @@ Where this machine can't run the Simulator (Linux, Windows, a cloud agent), or f
 simulator-use cloud start      # signs in through a link the first time (or NOMAC_API_KEY), starts a phone
 simulator-use run              # every tool now runs there; run and test send the project first
 simulator-use cloud stop       # ends it; the tools run on this machine again
-simulator-use cloud run . --tests   # CI in one line: start, build, run, test, a screenshot, stop
+simulator-use cloud run . --tests   # CI in one line: start, build, run, test, a screenshot and a recording, stop
 ```
 
 Only the files the phone lacks are sent (a one-file change sends one file), into the account's own encrypted workspace, kept between sessions so builds stay incremental; build output and dependencies stay behind. The `cloud` tool does the same over MCP.
 
-On GitHub, from any runner, with the result posted on each pull request and the screenshot kept as an artifact:
+On GitHub, from any runner, with the result posted on each pull request and the screenshot and recording kept as artifacts:
 
 ```yaml
 permissions:

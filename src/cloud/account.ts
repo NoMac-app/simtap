@@ -78,7 +78,7 @@ export async function signIn(): Promise<{ api: CloudApi } | { link: string; code
     pending = {
       device_code: String(started.device_code),
       user_code: String(started.user_code),
-      url: String(started.verification_uri_complete ?? started.verification_uri),
+      url: withSource(String(started.verification_uri_complete ?? started.verification_uri)),
       expires_at: Date.now() + Number(started.expires_in ?? 900) * 1000,
       base,
     };
@@ -99,6 +99,17 @@ export async function signIn(): Promise<{ api: CloudApi } | { link: string; code
     await new Promise((resolve) => setTimeout(resolve, answer.status === "slow_down" ? 10_000 : 5_000));
   }
   return { link: pending.url, code: pending.user_code };
+}
+
+/** The sign-in link with simulator-use as its source, so a signup through the tool says where it came from. */
+export function withSource(link: string): string {
+  try {
+    const url = new URL(link);
+    url.searchParams.set("utm_source", "simulator-use");
+    return url.toString();
+  } catch {
+    return link;
+  }
 }
 
 async function post(base: string, path: string, body: unknown): Promise<Record<string, unknown>> {

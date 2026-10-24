@@ -1,5 +1,5 @@
 name: simulator-use cloud
-description: Build, run and test an iOS app on a NoMac cloud iPhone Simulator from any runner, and post the result on the pull request.
+description: Build, run and test an iOS app on a NoMac cloud iPhone Simulator from any runner, with a screenshot and a recording, and post the result on the pull request.
 author: NoMac
 branding:
   icon: smartphone
@@ -66,7 +66,7 @@ runs:
           const fs = require("fs");
           const text = fs.readFileSync(process.env.RESULT_FILE, "utf8").slice(-6000);
           const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-          const body = `**simulator-use on a NoMac iPhone Simulator: ${process.env.RESULT}**\n\n\`\`\`\n${text}\n\`\`\`\nThe screenshot is in [this run's artifacts](${run}).`;
+          const body = `**simulator-use on a NoMac iPhone Simulator: ${process.env.RESULT}**\n\n\`\`\`\n${text}\n\`\`\`\nThe screenshot and the recording are in [this run's artifacts](${run}).`;
           await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });
     - if: steps.run.outputs.result != 'passed'
       shell: bash

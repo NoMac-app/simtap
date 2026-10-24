@@ -98,6 +98,8 @@ async function runOnce(args: Record<string, unknown>, context: CallContext): Pro
   if (/^Sign in to NoMac/.test(ensure.text)) return { text: ensure.text, isError: true };
   try {
     const path = typeof args.path === "string" ? args.path : ".";
+    // A video of the whole run for the person reviewing it (the phone records up to its own limit).
+    const recording = await forward("screen_record", { action: "start" }, context);
     const ran = await forward("app_run", { path }, { waitForJobs: true });
     lines.push(ran.text);
     failed ||= Boolean(ran.isError);
@@ -106,13 +108,30 @@ async function runOnce(args: Record<string, unknown>, context: CallContext): Pro
       lines.push(tested.text);
       failed ||= Boolean(tested.isError);
     }
+    const out = typeof args.out === "string" ? args.out : tmpdir();
     if (!ran.isError) {
       const look = await forward("ui_look", { screenshot: true }, context);
       image = look.image;
       if (image && context.waitForJobs) {
-        const file = join(typeof args.out === "string" ? args.out : tmpdir(), `simulator-use-cloud-${Date.now()}.${image.mimeType === "image/png" ? "png" : "jpg"}`);
+        const file = join(out, `simulator-use-cloud-${Date.now()}.${image.mimeType === "image/png" ? "png" : "jpg"}`);
         await writeFile(file, image.data);
         lines.push(`Screenshot: ${file}`);
+      }
+    }
+    if (!recording.isError) {
+      const stopped = await forward("screen_record", { action: "stop" }, context);
+      const link = /https?:\/\/\S+\/api\/v1\/simulator\/files\/[A-Za-z0-9_.-]+/.exec(stopped.text)?.[0];
+      if (link && context.waitForJobs) {
+        const response = await fetch(link);
+        if (response.ok) {
+          const file = join(out, `simulator-use-cloud-${Date.now()}.mp4`);
+          await writeFile(file, Buffer.from(await response.arrayBuffer()));
+          lines.push(`Recording: ${file}`);
+        } else {
+          lines.push(`Recording: ${link}`);
+        }
+      } else if (link) {
+        lines.push(`Recording: ${link}`);
       }
     }
   } finally {
@@ -128,7 +147,7 @@ export const cloud: Tool = {
   command: "cloud",
   positional: ["action", "path"],
   description:
-    "A NoMac cloud iPhone Simulator on a Mac with Xcode, $0.80 an hour by the minute: for a machine that can't run one (Linux, Windows, a cloud agent) or for CI. start signs in (a link for the person the first time; NOMAC_API_KEY for headless) and starts a phone: until stop, every tool runs there and app_run and tests_run send the project first. status: the phone and its cost so far. stop: ends it, back to this machine. run: start, build and run path, its tests with tests, a screenshot, stop, in one call.",
+    "A NoMac cloud iPhone Simulator on a Mac with Xcode, $0.80 an hour by the minute: for a machine that can't run one (Linux, Windows, a cloud agent) or for CI. start signs in (a link for the person the first time; NOMAC_API_KEY for headless) and starts a phone: until stop, every tool runs there and app_run and tests_run send the project first. status: the phone and its cost so far. stop: ends it. run: start, build and run path, its tests with tests, a screenshot and a recording, stop, in one call.",
   inputSchema: {
     type: "object",
     properties: {
