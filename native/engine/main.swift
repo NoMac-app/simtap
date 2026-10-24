@@ -539,7 +539,14 @@ func main() async {
     }
     let surface = framebuffer?.attach(watcher, on: DispatchQueue(label: "damage"))
     watcher.surface = surface
-    emit(["ready": true, "load_ms": loaded, "hid_ms": ms(hidStart), "framebuffer_ms": ms(fbStart), "framebuffer": framebuffer != nil, "surface": surface != nil, "name": simulator.name])
+    // The screen in pixels and its scale (points = pixels / scale), so a live view maps a click to a tap.
+    var screen: [String: Any] = [:]
+    if let surface {
+      let ref = unsafeBitCast(surface, to: IOSurfaceRef.self)
+      screen["width"] = IOSurfaceGetWidth(ref); screen["height"] = IOSurfaceGetHeight(ref)
+    }
+    if let scale = (simulator as AnyObject).value(forKeyPath: "device.deviceType.mainScreenScale") as? NSNumber { screen["scale"] = scale.doubleValue }
+    emit(["ready": true, "load_ms": loaded, "hid_ms": ms(hidStart), "framebuffer_ms": ms(fbStart), "framebuffer": framebuffer != nil, "surface": surface != nil, "name": simulator.name, "screen": screen])
 
     for sig in [SIGTERM, SIGINT, SIGHUP] {
       signal(sig, SIG_IGN)
