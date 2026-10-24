@@ -14,7 +14,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 import { run } from "./engine/exec.ts";
-import { engineCall } from "./engine/native.ts";
+import { closeEngines, engineCall } from "./engine/native.ts";
 import { cancelAllJobs } from "./engine/jobs.ts";
 import { listDevices, pickDevice } from "./engine/simctl.ts";
 import { heldDevice, stateDir } from "./engine/state.ts";
@@ -651,6 +651,140 @@ async function readable(params: Record<string, unknown>): Promise<Record<string,
   return { readable: false, ms: Date.now() - started, tries, error: error.slice(0, 200) };
 }
 
+// ---- Saved phone states ------------------------------------------------------------------------------------
+
+const STATE_ID = /^state_[a-f0-9]{40}$/;
+const STATE_NAME = /^[A-Za-z0-9._-]{1,64}$/;
+const KEEP_STATE_JOBS = 20;
+/** What iOS rebuilds by itself: left out of a saved state. */
+const REBUILT = ["Library/Caches", "Library/Logs", "tmp"];
+type SavedState = { name: string; bytes: number; saved_at: string; device: string; runtime: string };
+type StateJob = { state: "running" | "done" | "failed"; error?: string; bytes?: number; ms?: number; states?: SavedState[]; device?: string };
+const stateJobs = new Map<string, StateJob>();
+const statesDir = () => {
+  if (!workspace) throw Object.assign(new Error("no_workspace"), { code: -32000 });
+  return join(workspace, "phone-states");
+};
+
+/** Where a phone keeps its apps, their data, its keychain and permissions. */
+async function dataPathOf(udid: string): Promise<string> {
+  const { stdout } = await run("xcrun", ["simctl", "list", "-j", "devices"], { timeoutMs: 30_000 });
+  const devices = Object.values((JSON.parse(stdout) as { devices: Record<string, Array<{ udid: string; dataPath?: string }>> }).devices).flat();
+  const path = devices.find((d) => d.udid === udid)?.dataPath;
+  if (!path || !absolute(path)) throw new Error("the phone's data folder was not found");
+  return path;
+}
+
+/** The phone off, and its engine with it: a saved state is copied from (or to) a phone at rest. */
+async function shutDown(udid: string) {
+  closeEngines(udid);
+  await run("xcrun", ["simctl", "shutdown", udid], { timeoutMs: 60_000 }).catch((error: Error) => {
+    if (!/current state: Shutdown|Unable to shutdown device in current state/i.test(error.message)) throw error;
+  });
+}
+
+/** The phone booted again and readable by the engine (its first read after a boot fails for a while). */
+async function bootAgain(udid: string) {
+  await run("xcrun", ["simctl", "boot", udid], { timeoutMs: 60_000 }).catch((error: Error) => {
+    if (!/current state: Booted/i.test(error.message)) throw error;
+  });
+  await run("xcrun", ["simctl", "bootstatus", udid, "-b"], { timeoutMs: 180_000 });
+  await readable({ within_ms: 120_000 });
+}
+
+const listStates = async (): Promise<SavedState[]> => {
+  const names = (await readdir(statesDir()).catch(() => [] as string[])).filter((n) => STATE_NAME.test(n) && !n.endsWith(".saving"));
+  const states: SavedState[] = [];
+  for (const name of names) {
+    try {
+      states.push(JSON.parse(await readFile(join(statesDir(), name, "state.json"), "utf8")) as SavedState);
+    } catch {
+      // A state being written, or not one of ours.
+    }
+  }
+  return states.sort((a, b) => b.saved_at.localeCompare(a.saved_at));
+};
+
+async function saveState(name: string): Promise<StateJob> {
+  const device = pickDevice(await listDevices(true), undefined, await heldDevice());
+  const data = await dataPathOf(device.udid);
+  const dir = join(statesDir(), name), saving = `${dir}.saving`;
+  await shutDown(device.udid);
+  try {
+    await rm(saving, { recursive: true, force: true });
+    await mkdir(saving, { recursive: true });
+    // ditto keeps what iOS's files carry (extended attributes, permissions); the caches go after.
+    await run("/usr/bin/ditto", [data, join(saving, "data")], { timeoutMs: 10 * 60_000 });
+    for (const rebuilt of REBUILT) await rm(join(saving, "data", rebuilt), { recursive: true, force: true });
+    const bytes = Number((await run("/usr/bin/du", ["-sk", saving], { timeoutMs: 60_000 })).stdout.split(/\s/)[0]) * 1024;
+    const meta: SavedState = { name, bytes, saved_at: new Date().toISOString(), device: device.name, runtime: device.runtime };
+    await writeFile(join(saving, "state.json"), JSON.stringify(meta));
+    await rm(dir, { recursive: true, force: true });
+    await rename(saving, dir);
+    return { state: "done", bytes, device: `${device.name} (${device.runtime})` };
+  } finally {
+    await rm(saving, { recursive: true, force: true });
+    await bootAgain(device.udid);
+  }
+}
+
+async function restoreState(name: string): Promise<StateJob> {
+  const dir = join(statesDir(), name);
+  let meta: SavedState;
+  try {
+    meta = JSON.parse(await readFile(join(dir, "state.json"), "utf8")) as SavedState;
+  } catch {
+    throw new Error(`no saved state named ${name}`);
+  }
+  const device = pickDevice(await listDevices(true), undefined, await heldDevice());
+  // A state goes back onto the phone it came from: the same model and iOS.
+  if (meta.device !== device.name || meta.runtime !== device.runtime) throw new Error(`${name} was saved on ${meta.device} (${meta.runtime}); this phone is ${device.name} (${device.runtime})`);
+  const data = await dataPathOf(device.udid);
+  await shutDown(device.udid);
+  try {
+    await rm(data, { recursive: true, force: true });
+    await run("/usr/bin/ditto", [join(dir, "data"), data], { timeoutMs: 10 * 60_000 });
+    return { state: "done", bytes: meta.bytes, device: `${device.name} (${device.runtime})` };
+  } finally {
+    await bootAgain(device.udid);
+  }
+}
+
+/**
+ * The phone's state by name, in the account's workspace (NoMac Simulator plan 10.7 E4): save copies the phone's apps,
+ * their data, its keychain and permissions (the phone restarts); restore puts a saved state back onto a phone of the
+ * same model and iOS; list and delete manage them. save and restore answer within a while, or that they run; the same
+ * id reads their state.
+ */
+async function phoneState(params: Record<string, unknown>): Promise<StateJob> {
+  const { id, action, name } = params as { id: unknown; action: unknown; name: unknown };
+  if (typeof id !== "string" || !STATE_ID.test(id)) throw invalid("state id");
+  if (action === "list") return { state: "done", states: await listStates() };
+  if (typeof name !== "string" || !STATE_NAME.test(name)) throw invalid("name: letters, digits, dots, dashes and underscores, up to 64");
+  if (action === "delete") {
+    await rm(join(statesDir(), name), { recursive: true, force: true });
+    return { state: "done", states: await listStates() };
+  }
+  if (action !== "save" && action !== "restore") throw invalid("action is save, restore, list or delete");
+  let job = stateJobs.get(id);
+  if (!job) {
+    statesDir();
+    const started: StateJob = { state: "running" };
+    stateJobs.set(id, started);
+    while (stateJobs.size > KEEP_STATE_JOBS) stateJobs.delete(stateJobs.keys().next().value!);
+    const began = Date.now();
+    (action === "save" ? saveState(name) : restoreState(name)).then(
+      // The whole of it: the copy and the phone booted and readable again.
+      (result) => Object.assign(started, result, { ms: Date.now() - began }),
+      (error: Error) => Object.assign(started, { state: "failed", error: error.message.slice(0, 300) }),
+    );
+    job = started;
+  }
+  const deadline = Date.now() + ANSWER_WITHIN_MS;
+  while (job.state === "running" && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+  return { ...job };
+}
+
 // ---- The pool's warm-up -----------------------------------------------------------------------------------
 
 const WARM_BUNDLE = "app.nomac.prewarm";
@@ -723,6 +857,8 @@ export async function hosted(method: string, params: Record<string, unknown>): P
       return warm(params);
     case "simulator-use/readable":
       return readable(params);
+    case "simulator-use/state":
+      return phoneState(params);
     case "simulator-use/clone":
       return clone(params);
     case "simulator-use/fetch":

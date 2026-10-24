@@ -342,3 +342,21 @@ test("the pool's first read asks the engine again until it reads, and says when 
   assert.equal(never.error, "nilError");
   setFirstRead(undefined);
 });
+
+test("saved phone states: checked names and ids, listed with their size, deleted, kept in the workspace only", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "su-ws-"));
+  await hosted("simulator-use/configure", { workspace });
+  const id = (n: number) => `state_${String(n).repeat(40)}`;
+  assert.deepEqual(await hosted("simulator-use/state", { id: id(1), action: "list" }), { state: "done", states: [] });
+  // A state as save leaves it: its data and what it was saved from.
+  mkdirSync(join(workspace, "phone-states", "signed-in", "data"), { recursive: true });
+  writeFileSync(join(workspace, "phone-states", "signed-in", "state.json"), JSON.stringify({ name: "signed-in", bytes: 632184832, saved_at: "2026-10-24T07:11:18.500Z", device: "iPhone 17 Pro", runtime: "iOS 27.0" }));
+  mkdirSync(join(workspace, "phone-states", "half.saving"), { recursive: true });
+  const listed = (await hosted("simulator-use/state", { id: id(2), action: "list" })) as { states: Array<{ name: string }> };
+  assert.deepEqual(listed.states.map((s) => s.name), ["signed-in"], "a state still being written is not listed");
+  for (const bad of [{ id: "state_1", action: "list" }, { id: id(3), action: "save", name: "../escape" }, { id: id(3), action: "save", name: "" }, { id: id(3), action: "wipe", name: "x" }]) {
+    await assert.rejects(hosted("simulator-use/state", bad), Error, JSON.stringify(bad));
+  }
+  assert.deepEqual(await hosted("simulator-use/state", { id: id(4), action: "delete", name: "signed-in" }), { state: "done", states: [] });
+  assert.equal(existsSync(join(workspace, "phone-states", "signed-in")), false);
+});
