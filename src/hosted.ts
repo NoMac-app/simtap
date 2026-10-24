@@ -14,6 +14,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 import { run } from "./engine/exec.ts";
+import { engineCall } from "./engine/native.ts";
 import { cancelAllJobs } from "./engine/jobs.ts";
 import { listDevices, pickDevice } from "./engine/simctl.ts";
 import { heldDevice, stateDir } from "./engine/state.ts";
@@ -616,6 +617,40 @@ async function replayOp(params: Record<string, unknown>): Promise<Record<string,
   return { recording: false, calls: ending.log.length, seconds, video };
 }
 
+// ---- The pool's first read ----------------------------------------------------------------------------------
+
+type Read = (timeoutMs: number) => Promise<Record<string, unknown> & { ok?: boolean; error?: string } | undefined>;
+/** Tests replace the phone's engine read. */
+let readForTests: Read | undefined;
+export function setFirstRead(read: Read | undefined) {
+  readForTests = read;
+}
+
+/**
+ * The pool's first read of a phone just booted: the engine only, again until it reads, never AXe (whose own
+ * automation session beside a young engine's wedges the phone). Right after a boot the engine's first read fails
+ * after about 20 s and the next one works (research, section 13), so the pool reads at once instead of waiting 30 s.
+ */
+async function readable(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const within = Math.min(Math.max(Number(params.within_ms) || 120_000, 1_000), 300_000);
+  const started = Date.now();
+  let read = readForTests;
+  if (!read) {
+    const device = pickDevice(await listDevices(true), undefined, await heldDevice());
+    read = (timeoutMs) => engineCall(device.udid, { op: "describe" }, timeoutMs);
+  }
+  let tries = 0, error = "";
+  while (Date.now() - started < within) {
+    tries++;
+    const answer = await read(Math.max(1_000, within - (Date.now() - started)));
+    if (answer?.ok) return { readable: true, ms: Date.now() - started, tries };
+    error = answer?.error ?? "no engine";
+    // No engine yet (it would not start): it is tried again after a while; a read that failed, at once.
+    await new Promise((resolve) => setTimeout(resolve, answer ? 300 : 2_000));
+  }
+  return { readable: false, ms: Date.now() - started, tries, error: error.slice(0, 200) };
+}
+
 // ---- The pool's warm-up -----------------------------------------------------------------------------------
 
 const WARM_BUNDLE = "app.nomac.prewarm";
@@ -686,6 +721,8 @@ export async function hosted(method: string, params: Record<string, unknown>): P
       return get(params);
     case "simulator-use/warm":
       return warm(params);
+    case "simulator-use/readable":
+      return readable(params);
     case "simulator-use/clone":
       return clone(params);
     case "simulator-use/fetch":

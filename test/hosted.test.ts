@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { callSummary, gitEnv, gitUrl, hosted, hostedText, noteCall, replayDir, setAnswerWithin, setReplayRecorder } from "../src/hosted.ts";
+import { callSummary, gitEnv, gitUrl, hosted, hostedText, noteCall, replayDir, setAnswerWithin, setFirstRead, setReplayRecorder } from "../src/hosted.ts";
 
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 const project = "prj_" + "f".repeat(32);
@@ -326,4 +326,19 @@ test("the replay lists every call without what was typed, and its stop leaves th
   // A call after the stop is not listed anywhere.
   noteCall("ui_look", {}, Date.now(), { content: [] });
   assert.equal(callSummary("app_run", { git: "https://x" }), "app_run");
+});
+
+test("the pool's first read asks the engine again until it reads, and says when it never did", async () => {
+  const answers = [undefined, { ok: false, error: "nilError" }, { ok: true, tree: [] }];
+  const asked: number[] = [];
+  setFirstRead(async (timeoutMs) => { asked.push(timeoutMs); return answers.shift(); });
+  const read = (await hosted("simulator-use/readable", { within_ms: 30_000 })) as Record<string, unknown>;
+  assert.equal(read.readable, true);
+  assert.equal(read.tries, 3);
+  assert.ok(asked.every((t) => t > 0 && t <= 30_000));
+  setFirstRead(async () => ({ ok: false, error: "nilError" }));
+  const never = (await hosted("simulator-use/readable", { within_ms: 1_000 })) as Record<string, unknown>;
+  assert.equal(never.readable, false);
+  assert.equal(never.error, "nilError");
+  setFirstRead(undefined);
 });

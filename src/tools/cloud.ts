@@ -25,7 +25,7 @@ const phoneOf = async (api: CloudApi, id: string) => (await api.json("GET", `/ap
 async function untilReady(api: CloudApi, id: string, waitMs: number): Promise<Phone> {
   let phone = await phoneOf(api, id);
   for (const deadline = Date.now() + waitMs; !["ready", "failed", "stopped", "stopping"].includes(phone.state) && Date.now() < deadline; ) {
-    await new Promise((r) => setTimeout(r, 1_000));
+    await new Promise((r) => setTimeout(r, 500));
     phone = await phoneOf(api, id);
   }
   return phone;
