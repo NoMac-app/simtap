@@ -21,8 +21,8 @@ const JOB = /Next: job_status \{job_id: "([^"]+)"\}/;
 export async function cloudPhone(): Promise<{ api: CloudApi; session: string }> {
   const state = await cloudState();
   const api = await account();
-  if (!api) throw new ToolError("Cloud is on but this machine is not signed in to NoMac.", "Call cloud start to sign in, or cloud stop to run tools on this Mac.");
-  if (!state.session) throw new ToolError("Cloud is on but has no phone.", "Call cloud start for one, or cloud stop to run tools on this Mac.");
+  if (!api) throw new ToolError("Cloud is on but this machine is not signed in to NoMac.", "Call cloud start to sign in, or cloud stop to run tools on this machine.");
+  if (!state.session) throw new ToolError("Cloud is on but has no phone.", "Call cloud start for one, or cloud stop to run tools on this machine.");
   return { api, session: state.session };
 }
 
@@ -30,7 +30,7 @@ export async function cloudPhone(): Promise<{ api: CloudApi; session: string }> 
 async function ended(session: string): Promise<ToolResult> {
   const state = await cloudState();
   if (state.session === session) await setCloudState({ ...state, session: undefined });
-  return { text: `The cloud phone ${session} has ended (its time limit, an idle stop, or stopped elsewhere).\nNext: cloud start for a new one, or cloud stop to run tools on this Mac again.`, isError: true };
+  return { text: `The cloud phone ${session} has ended (its time limit, an idle stop, or stopped elsewhere).\nNext: cloud start for a new one, or cloud stop to run tools on this machine again.`, isError: true };
 }
 
 /**

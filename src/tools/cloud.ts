@@ -60,7 +60,7 @@ async function start(context: CallContext): Promise<ToolResult> {
 
 async function status(): Promise<ToolResult> {
   const state = await cloudState();
-  if (!state.on) return { text: "Cloud is off: the tools run on this Mac. cloud start runs them on a NoMac phone." };
+  if (!state.on) return { text: "Cloud is off: the tools run on this machine. cloud start runs them on a NoMac phone." };
   const api = await account();
   if (!api || !state.session) return { text: "Cloud is on but has no phone yet. cloud start starts one." };
   const phone = await phoneOf(api, state.session);
@@ -72,7 +72,7 @@ async function stop(): Promise<ToolResult> {
   const state = await cloudState();
   const api = await account();
   await setCloudState({ on: false });
-  if (!state.session || !api) return { text: "Cloud is off: the tools run on this Mac." };
+  if (!state.session || !api) return { text: "Cloud is off: the tools run on this machine." };
   await api.json("DELETE", `/api/v1/simulator/sessions/${state.session}`).catch((error: unknown) => {
     if (!(error instanceof CloudError && error.status === 404)) throw error;
   });
@@ -82,7 +82,7 @@ async function stop(): Promise<ToolResult> {
     phone = await phoneOf(api, state.session).catch(() => undefined);
   }
   const minutes = Math.ceil((phone?.cost?.billable_seconds ?? 0) / 60);
-  return { text: `Stopped the cloud phone after ${minutes} min, ${dollars(phone?.cost?.accrued_microunits)}. The tools run on this Mac again.` };
+  return { text: `Stopped the cloud phone after ${minutes} min, ${dollars(phone?.cost?.accrued_microunits)}. The tools run on this machine again.` };
 }
 
 /**
@@ -118,7 +118,8 @@ async function runOnce(args: Record<string, unknown>, context: CallContext): Pro
   } finally {
     if (!before.on) lines.push((await stop()).text);
   }
-  return { text: lines.join("\n\n"), ...(image ? { image } : {}), ...(failed ? { isError: true } : {}) };
+  // The command line saved the screenshot above; an MCP client gets the picture itself.
+  return { text: lines.join("\n\n"), ...(image && !context.waitForJobs ? { image } : {}), ...(failed ? { isError: true } : {}) };
 }
 
 export const cloud: Tool = {

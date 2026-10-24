@@ -124,7 +124,7 @@ test("cloud start, then every tool on the phone: app_run sends the project first
   assert.match((await callTool("cloud", { action: "start" })).text, /^Cloud phone ready/);
 
   const stopped = await callTool("cloud", { action: "stop" });
-  assert.match(stopped.text, /The tools run on this Mac again/);
+  assert.match(stopped.text, /The tools run on this machine again/);
   assert.match((await callTool("cloud", { action: "status" })).text, /^Cloud is off/);
 });
 
