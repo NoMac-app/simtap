@@ -15,6 +15,8 @@ const READY_WAIT_MS = 40_000;
 const ACTIONS = ["start", "status", "stop", "run"];
 
 type Phone = { id: string; state: string; ready_at?: string | null; failure_code?: string | null; cost?: { accrued_microunits?: string; billable_seconds?: number }; cleanup_confirmed?: boolean };
+/** A phone answer's links: view and control while it runs, its replay always. */
+type Links = { view?: string; control?: string; replay?: string };
 
 const dollars = (micro: string | undefined) => `$${(Number(micro ?? 0) / 1e6).toFixed(2)}`;
 const phoneOf = async (api: CloudApi, id: string) => (await api.json("GET", `/api/v1/simulator/sessions/${id}`)).session as Phone;
@@ -55,7 +57,9 @@ async function start(context: CallContext): Promise<ToolResult> {
     }
     return { text: `The cloud phone ${id} is still starting after ${((Date.now() - started) / 1000).toFixed(0)} s.\nNext: cloud status, or any tool: it waits for the phone.` };
   }
-  return { text: `Cloud phone ready in ${((Date.now() - started) / 1000).toFixed(1)} s: an iPhone Simulator on a NoMac Mac, $0.80 an hour by the minute.\nEvery tool now runs there; app_run and tests_run send the project first. cloud stop ends it.` };
+  const links = (created.links ?? {}) as Links;
+  const watch = links.view && links.control ? `\nA person can watch it at ${links.view} or use it at ${links.control}.` : "";
+  return { text: `Cloud phone ready in ${((Date.now() - started) / 1000).toFixed(1)} s: an iPhone Simulator on a NoMac Mac, $0.80 an hour by the minute.\nEvery tool now runs there; app_run and tests_run send the project first. cloud stop ends it.${watch}` };
 }
 
 async function status(): Promise<ToolResult> {
@@ -73,8 +77,9 @@ async function stop(): Promise<ToolResult> {
   const api = await account();
   await setCloudState({ on: false });
   if (!state.session || !api) return { text: "Cloud is off: the tools run on this machine." };
-  await api.json("DELETE", `/api/v1/simulator/sessions/${state.session}`).catch((error: unknown) => {
+  const stopped = await api.json("DELETE", `/api/v1/simulator/sessions/${state.session}`).catch((error: unknown) => {
     if (!(error instanceof CloudError && error.status === 404)) throw error;
+    return undefined;
   });
   let phone = await phoneOf(api, state.session).catch(() => undefined);
   for (let i = 0; phone && !phone.cleanup_confirmed && i < 15; i++) {
@@ -82,7 +87,8 @@ async function stop(): Promise<ToolResult> {
     phone = await phoneOf(api, state.session).catch(() => undefined);
   }
   const minutes = Math.ceil((phone?.cost?.billable_seconds ?? 0) / 60);
-  return { text: `Stopped the cloud phone after ${minutes} min, ${dollars(phone?.cost?.accrued_microunits)}. The tools run on this machine again.` };
+  const replay = ((stopped?.links ?? {}) as Links).replay;
+  return { text: `Stopped the cloud phone after ${minutes} min, ${dollars(phone?.cost?.accrued_microunits)}. The tools run on this machine again.${replay ? `\nIts replay, the screen and every call, opens at ${replay} in a minute (kept 7 days).` : ""}` };
 }
 
 /**

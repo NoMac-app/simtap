@@ -191,6 +191,8 @@ simulator-use cloud run . --tests   # CI in one line: start, build, run, test, a
 
 Only the files the phone lacks are sent (a one-file change sends one file), into the account's own encrypted workspace, kept between sessions so builds stay incremental; build output and dependencies stay behind. The `cloud` tool does the same over MCP.
 
+`cloud start` answers a link for a person to watch the phone in a browser and one to use it. `cloud stop` answers the session's replay: the screen as a video beside every call (typed text left out), kept for 7 days.
+
 On GitHub, from any runner, with the result posted on each pull request and the screenshot and recording kept as artifacts:
 
 ```yaml
@@ -205,7 +207,7 @@ steps:
 
 ## Privacy
 
-simulator-use sends nothing unless cloud mode is on. There is no telemetry and no network access at runtime: it runs `xcrun simctl`, the bundled AXe binary and `sips`, all on your Mac. With cloud on, it sends the project being run or tested, and the tools' calls, to NoMac.
+simulator-use sends nothing unless cloud mode is on. There is no telemetry and no network access at runtime: it runs `xcrun simctl`, the bundled AXe binary and `sips`, all on your Mac. With cloud on, it sends the project being run or tested, and the tools' calls, to NoMac, which keeps the session's replay for 7 days.
 
 ## How it works
 

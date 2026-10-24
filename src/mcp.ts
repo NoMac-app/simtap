@@ -7,7 +7,7 @@
 import { createInterface } from "node:readline";
 
 import { cancelAllJobs } from "./engine/jobs.ts";
-import { hosted, hostedAnswer } from "./hosted.ts";
+import { hosted, hostedAnswer, noteCall } from "./hosted.ts";
 import { callTool, INSTRUCTIONS, toContent, TOOLS, VERSION } from "./registry.ts";
 import { setting } from "./settings.ts";
 
@@ -39,9 +39,12 @@ async function result(method: string, params: Record<string, unknown>, stateless
     case "tools/call": {
       const name = typeof params.name === "string" ? params.name : "";
       const args = params.arguments && typeof params.arguments === "object" ? (params.arguments as Record<string, unknown>) : {};
+      const started = Date.now();
       const out = toContent(await callTool(name, args));
-      // On NoMac Simulator's host the customer never reads a path of the host (src/hosted.ts).
-      return setting("HOSTED") ? hostedAnswer(out) : out;
+      // On NoMac Simulator's host the customer never reads a path of the host, and the replay lists the call (src/hosted.ts).
+      if (!setting("HOSTED")) return out;
+      noteCall(name, args, started, out);
+      return hostedAnswer(out);
     }
     default:
       // NoMac Simulator's host asks a hosted server for more than tool calls (src/hosted.ts).

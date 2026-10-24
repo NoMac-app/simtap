@@ -4,7 +4,7 @@
  * work happens here: hostd checks every request's shape first (mac-protocol's sim operation) and passes it on.
  */
 
-import { execFile } from "node:child_process";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync, statSync } from "node:fs";
 import { chmod, lstat, lutimes, mkdir, mkdtemp, readdir, readFile, readlink, rename, rm, unlink, writeFile } from "node:fs/promises";
@@ -15,7 +15,8 @@ import { pipeline } from "node:stream/promises";
 
 import { run } from "./engine/exec.ts";
 import { cancelAllJobs } from "./engine/jobs.ts";
-import { stateDir } from "./engine/state.ts";
+import { listDevices, pickDevice } from "./engine/simctl.ts";
+import { heldDevice, stateDir } from "./engine/state.ts";
 import { normalizeRemote, SKIP_DIRS } from "./cloud/sync.ts";
 import { callTool } from "./registry.ts";
 
@@ -542,6 +543,79 @@ async function appIn(root: string): Promise<string | undefined> {
   return inner ? join(root, folders[0]!.name, inner.name) : undefined;
 }
 
+// ---- The replay -------------------------------------------------------------------------------------------
+
+/** One tool call of the session, as the replay lists it: never what was typed. */
+type Logged = { at_ms: number; tool: string; what: string; ms: number; ok: boolean; said: string };
+// The replay's own recorder, the file it records and the calls so far.
+let replay: { recorder: ChildProcess; file: string; started: number; log: Logged[] } | undefined;
+const REPLAY_CALLS = 2000;
+
+/**
+ * What a call did, for the replay: the tool and its main argument, with typed text masked (fill #password …).
+ */
+export function callSummary(tool: string, args: Record<string, unknown>): string {
+  if (tool === "ui_act" && Array.isArray(args.steps)) return args.steps.map((step) => String(step).replace(/^((?:fill|type)\b(?:\s+(?:#\S+|"[^"]*"|\S+))?)\s.*$/i, (_m, head: string) => (/^type/i.test(head) ? "type …" : `${head} …`))).join(" · ").slice(0, 200);
+  if (tool === "app_control") return [args.action, args.action === "open_url" ? "(a link)" : args.app].filter(Boolean).join(" ").slice(0, 120);
+  if (tool === "app_run" || tool === "tests_run") return tool;
+  return Object.keys(args).length ? `${tool} ${Object.keys(args).join(", ")}` : tool;
+}
+
+/** Notes a call for the replay, while one records. */
+export function noteCall(tool: string, args: Record<string, unknown>, started: number, result: { content: unknown[]; isError?: boolean }) {
+  if (!replay || replay.log.length >= REPLAY_CALLS) return;
+  const text = result.content.map((c) => (c && typeof c === "object" && (c as { type?: unknown }).type === "text" ? String((c as { text?: unknown }).text ?? "") : "")).join("\n");
+  // ui_act's answer can repeat what was typed ("fill #password \"…\" failed"): its quoted parts never reach the list.
+  const first = hostedText(text.split("\n")[0] ?? "");
+  const said = tool === "ui_act" ? first.replace(/"[^"]*"|“[^”]*”/g, "…") : first;
+  replay.log.push({ at_ms: started - replay.started, tool, what: callSummary(tool, args), ms: Date.now() - started, ok: !result.isError, said: said.slice(0, 200) });
+}
+
+// simctl's recorder, as screen_record's but its own process: the agent's recordings go on beside it, and the video
+// keeps the wall clock, so the list's times are its times. Tests replace it.
+let recordScreen = async (file: string): Promise<ChildProcess> => {
+  const device = pickDevice(await listDevices(true), undefined, await heldDevice());
+  return spawn("xcrun", ["simctl", "io", device.udid, "recordVideo", "--codec=h264", "--force", file], { stdio: "ignore" });
+};
+export function setReplayRecorder(record: (file: string) => Promise<ChildProcess>) {
+  recordScreen = record;
+}
+
+/** Where stop leaves the replay (video.mp4 and log.json) for NoMac to take once the session has ended. */
+export const replayDir = () => join(stateDir(), "replay");
+
+/**
+ * The session's replay (NoMac Simulator, plan 10.7 C3): start records the phone's screen and lists every tool
+ * call; stop ends both and leaves the video and the list in replayDir(). NoMac uploads them after the session's
+ * end, so the upload is never the customer's time.
+ */
+async function replayOp(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  if (params.op === "start") {
+    if (replay) return { recording: true };
+    const file = join(stateDir(), `replay-${Date.now()}.mp4`);
+    replay = { recorder: await recordScreen(file), file, started: Date.now(), log: [] };
+    return { recording: true };
+  }
+  if (params.op !== "stop") throw invalid("op is start or stop");
+  const ending = replay;
+  replay = undefined;
+  if (!ending) return { recording: false };
+  // SIGINT makes simctl write the video's index and close it; a recorder that hangs is killed after 8 s.
+  await new Promise<void>((resolve) => {
+    if (ending.recorder.exitCode !== null) return resolve();
+    const timer = setTimeout(() => { ending.recorder.kill("SIGKILL"); resolve(); }, 8_000);
+    ending.recorder.once("exit", () => { clearTimeout(timer); resolve(); });
+    ending.recorder.kill("SIGINT");
+  });
+  const seconds = Math.round((Date.now() - ending.started) / 1000);
+  const dir = replayDir();
+  await mkdir(dir, { recursive: true });
+  const video = existsSync(ending.file);
+  if (video) await rename(ending.file, join(dir, "video.mp4"));
+  await writeFile(join(dir, "log.json"), JSON.stringify({ started_at: new Date(ending.started).toISOString(), seconds, video, calls: ending.log }));
+  return { recording: false, calls: ending.log.length, seconds, video };
+}
+
 // ---- The pool's warm-up -----------------------------------------------------------------------------------
 
 const WARM_BUNDLE = "app.nomac.prewarm";
@@ -616,6 +690,8 @@ export async function hosted(method: string, params: Record<string, unknown>): P
       return clone(params);
     case "simulator-use/fetch":
       return fetchUpload(params);
+    case "simulator-use/replay":
+      return replayOp(params);
     case "simulator-use/sync":
       if (params.op === "manifest") return manifest(params);
       if (params.op === "place") return place(params);

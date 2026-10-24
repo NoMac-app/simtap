@@ -65,12 +65,12 @@ before(async () => {
     // A file link needs no key: the link is the permission.
     if (path === "/api/v1/simulator/files/rec.tok") { res.writeHead(200, { "content-type": "video/mp4" }); res.end("mp4"); return; }
     if (req.headers.authorization !== "Bearer nmk_test") return send(401, { error: { code: "unauthorized", message: "no" } });
-    if (req.method === "POST" && path === "/api/v1/simulator/sessions") return send(202, { session: { id: "ses_phone", state: "queued" } });
+    if (req.method === "POST" && path === "/api/v1/simulator/sessions") return send(202, { session: { id: "ses_phone", state: "queued" }, links: { view: "https://nomac.app/simulator-use/view/w.x", control: "https://nomac.app/simulator-use/view/c.x", expires_at: "2026-10-24T12:00:00.000Z", replay: "https://nomac.app/simulator-use/replay/r.x" } });
     if (req.method === "GET" && path === "/api/v1/simulator/sessions/ses_phone") {
       if (phoneState === "gone") return send(409, { error: { code: "session_not_ready", message: "not running" } });
       return send(200, { session: { id: "ses_phone", state: phoneState, cost: { accrued_microunits: "26667", billable_seconds: 120 }, cleanup_confirmed: phoneState === "stopped" } });
     }
-    if (req.method === "DELETE" && path === "/api/v1/simulator/sessions/ses_phone") { phoneState = "stopped"; return send(202, { session: { id: "ses_phone", state: "stopping" } }); }
+    if (req.method === "DELETE" && path === "/api/v1/simulator/sessions/ses_phone") { phoneState = "stopped"; return send(202, { session: { id: "ses_phone", state: "stopping" }, links: { replay: "https://nomac.app/simulator-use/replay/r.x" } }); }
     if (path === "/api/v1/simulator/sessions/ses_phone/sync") {
       const op = body as { op: string; entries?: { path: string }[] };
       if (op.op === "manifest") return send(200, { missing: (op.entries ?? []).map((e) => e.path).filter((p) => p.endsWith(".swift")) });
@@ -103,6 +103,7 @@ test("cloud start, then every tool on the phone: app_run sends the project first
 
   const started = await callTool("cloud", { action: "start" });
   assert.match(started.text, /^Cloud phone ready in [\d.]+ s/);
+  assert.match(started.text, /A person can watch it at https:\/\/nomac\.app\/simulator-use\/view\/w\.x or use it at https:\/\/nomac\.app\/simulator-use\/view\/c\.x\./);
   assert.match(seen.find((r) => r.method === "POST" && r.path === "/api/v1/simulator/sessions")!.key ?? "", /^cli-start-/);
 
   const ran = await callTool("app_run", { path: project });
@@ -129,6 +130,7 @@ test("cloud start, then every tool on the phone: app_run sends the project first
 
   const stopped = await callTool("cloud", { action: "stop" });
   assert.match(stopped.text, /The tools run on this machine again/);
+  assert.match(stopped.text, /Its replay, the screen and every call, opens at https:\/\/nomac\.app\/simulator-use\/replay\/r\.x in a minute \(kept 7 days\)\./);
   assert.match((await callTool("cloud", { action: "status" })).text, /^Cloud is off/);
 });
 
@@ -149,6 +151,7 @@ test("cloud run is CI in one line: start, build and run, the tests, a screenshot
   const video = /Recording: (\S+)/.exec(ran.text)?.[1];
   assert.ok(video && video.startsWith(out) && video.endsWith(".mp4") && existsSync(video), ran.text);
   assert.match(ran.text, /Stopped the cloud phone/);
+  assert.match(ran.text, /Its replay, the screen and every call, opens at https:\/\/nomac\.app\/simulator-use\/replay\/r\.x/);
   assert.match((await callTool("cloud", { action: "status" })).text, /^Cloud is off/);
 });
 

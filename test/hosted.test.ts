@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { gitEnv, gitUrl, hosted, hostedText, setAnswerWithin } from "../src/hosted.ts";
+import { callSummary, gitEnv, gitUrl, hosted, hostedText, noteCall, replayDir, setAnswerWithin, setReplayRecorder } from "../src/hosted.ts";
 
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 const project = "prj_" + "f".repeat(32);
@@ -297,4 +297,33 @@ test("an uploaded project or .app is unpacked into the workspace, only what diff
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test("the replay lists every call without what was typed, and its stop leaves the video and the list for NoMac", async () => {
+  process.env.SIMULATOR_USE_STATE_DIR = mkdtempSync(join(tmpdir(), "su-state-"));
+  assert.deepEqual(await hosted("simulator-use/replay", { op: "stop" }), { recording: false }, "a stop with none recording");
+  // A recorder that writes the video once it is asked to end, as simctl does.
+  setReplayRecorder(async (file) => spawn("/bin/sh", ["-c", `trap 'printf video > "${file}"; exit 0' INT; while :; do sleep 0.1; done`], { stdio: "ignore" }));
+  assert.deepEqual(await hosted("simulator-use/replay", { op: "start" }), { recording: true });
+  assert.deepEqual(await hosted("simulator-use/replay", { op: "start" }), { recording: true }, "a second start keeps the first recording");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const at = Date.now();
+  noteCall("ui_act", { steps: ['fill #password "hunter2"', "tap Sign in", "type secret words"] }, at, { content: [{ type: "text", text: 'fill #password "hunter2" failed: no field' }], isError: true });
+  noteCall("app_control", { action: "open_url", app: "https://example.com/?token=abc" }, at, { content: [{ type: "text", text: "Opened." }] });
+  noteCall("ui_look", {}, at, { content: [{ type: "text", text: "Home screen" }] });
+  const done = (await hosted("simulator-use/replay", { op: "stop" })) as Record<string, unknown>;
+  assert.equal(done.recording, false);
+  assert.equal(done.calls, 3);
+  assert.equal(done.video, true);
+  assert.equal(readFileSync(join(replayDir(), "video.mp4"), "utf8"), "video");
+  const log = JSON.parse(readFileSync(join(replayDir(), "log.json"), "utf8")) as { calls: Array<Record<string, unknown>>; video: boolean };
+  assert.equal(log.video, true);
+  assert.deepEqual(log.calls.map((c) => c.what), ["fill #password … · tap Sign in · type …", "open_url (a link)", "ui_look"]);
+  assert.equal(log.calls[0]!.said, "fill #password … failed: no field");
+  assert.equal(log.calls[0]!.ok, false);
+  assert.ok((log.calls[0]!.at_ms as number) >= 300);
+  assert.doesNotMatch(readFileSync(join(replayDir(), "log.json"), "utf8"), /hunter2|secret words|token=abc/);
+  // A call after the stop is not listed anywhere.
+  noteCall("ui_look", {}, Date.now(), { content: [] });
+  assert.equal(callSummary("app_run", { git: "https://x" }), "app_run");
 });
