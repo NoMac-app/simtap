@@ -65,3 +65,19 @@ export async function currentApp(udid: string): Promise<CurrentApp | undefined> 
 export async function setCurrentApp(udid: string, app: CurrentApp): Promise<void> {
   await writeFile(join(await deviceDir(udid), "app.json"), JSON.stringify(app));
 }
+
+/**
+ * A device's time zone as simulator-use sets it (app_control timezone): iOS has no setting a tool can change, so
+ * every app simulator-use launches gets it as TZ.
+ */
+export async function deviceTimeZone(udid: string): Promise<string | undefined> {
+  try {
+    return (JSON.parse(await readFile(join(await deviceDir(udid), "settings.json"), "utf8")) as { timeZone?: string }).timeZone;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function setDeviceTimeZone(udid: string, timeZone: string | undefined): Promise<void> {
+  await writeFile(join(await deviceDir(udid), "settings.json"), JSON.stringify(timeZone ? { timeZone } : {}));
+}

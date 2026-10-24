@@ -3,7 +3,7 @@ import { resolve as resolvePath } from "node:path";
 
 import { appInfo, BUNDLE_ID, bundleIdOf, install, pushPayload, simctlAction, stopLogStream } from "../engine/apps.ts";
 import { listDevices, pickDevice } from "../engine/simctl.ts";
-import { currentApp, heldDevice, setCurrentApp } from "../engine/state.ts";
+import { currentApp, heldDevice, setCurrentApp, setDeviceTimeZone } from "../engine/state.ts";
 import { ToolError } from "../errors.ts";
 import { readScreen } from "../look/read.ts";
 import { render } from "../look/snapshot.ts";
@@ -11,7 +11,10 @@ import { grantAll, openInPrompt, setPermissionMode } from "../engine/prompts.ts"
 import { launchAndLook, tapPrompt } from "./launch-app.ts";
 import type { Tool } from "./types.ts";
 
-const ACTIONS = ["launch", "install", "terminate", "uninstall", "open_url", "grant", "revoke", "reset_permissions", "location", "push"];
+const ACTIONS = ["launch", "install", "terminate", "uninstall", "open_url", "grant", "revoke", "reset_permissions", "location", "push", "appearance", "locale", "timezone", "text_size", "status_bar"];
+/** simctl ui content_size's sizes. */
+const TEXT_SIZES = ["extra-small", "small", "medium", "large", "extra-large", "extra-extra-large", "extra-extra-extra-large",
+  "accessibility-medium", "accessibility-large", "accessibility-extra-large", "accessibility-extra-extra-large", "accessibility-extra-extra-extra-large"];
 /** What simctl privacy takes (its help, plus camera, which it also accepts). */
 const PERMISSIONS = ["all", "calendar", "camera", "contacts", "contacts-limited", "location", "location-always", "media-library", "microphone", "motion", "photos", "photos-add", "reminders", "siri"];
 
@@ -22,7 +25,32 @@ const VALUE: Record<string, string> = {
   revoke: "a permission, as for grant",
   location: '"latitude,longitude", or "clear"',
   push: 'the notification text, or a JSON payload with "aps"',
+  appearance: '"light" or "dark"',
+  locale: 'a language and region, like "fr_FR", "pt-BR" or "zh-Hans_CN"',
+  timezone: 'an IANA time zone, like "Europe/Paris", or "clear"',
+  text_size: `one of ${TEXT_SIZES.join(", ")}`,
+  status_bar: '"clean" (9:41, full signal and battery, for screenshots) or "clear"',
 };
+
+/** A locale as iOS keeps it: the language for AppleLanguages ("pt-BR") and the locale for AppleLocale ("pt_BR"). */
+export function localeParts(value: string): { language: string; locale: string } {
+  const m = /^\s*([a-z]{2,3})(?:[-_]([A-Z][a-z]{3}))?(?:[-_]([A-Z]{2}|\d{3}))?\s*$/.exec(value);
+  if (!m) throw new ToolError(`"${value}" is not a language and region.`, 'For example "fr_FR", "pt-BR", "zh-Hans_CN" or "en".');
+  const [, lang, script, region] = m;
+  return { language: [lang, script, region].filter(Boolean).join("-"), locale: [[lang, script].filter(Boolean).join("-"), region].filter(Boolean).join("_") };
+}
+
+/** An IANA time zone this machine knows (Intl refuses any other). */
+export function timeZoneName(value: string): string {
+  const zone = value.trim();
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: zone });
+    if (/^[A-Za-z_]+(?:\/[A-Za-z0-9_+-]+)*$/.test(zone)) return zone;
+  } catch {
+    // Not a time zone.
+  }
+  throw new ToolError(`"${value}" is not a time zone.`, 'Use an IANA name, like "Europe/Paris" or "America/New_York".');
+}
 
 /** A push from plain text, or the agent's own JSON payload, checked the way simctl will. */
 export function pushJson(value: string): string {
@@ -43,13 +71,13 @@ export const appControl: Tool = {
   name: "app_control",
   title: "Control an app",
   description:
-    "Launch, install, stop or remove an app on the Simulator; open a URL or deep link; grant, revoke or reset a permission; set the location; send a push. launch answers with the app's first screen; later calls default to the app launched last.",
+    "Launch, install, stop or remove an app on the Simulator; open a URL or deep link; grant, revoke or reset a permission; set the location; send a push; set the phone's appearance, locale, time zone, text size or a clean status bar. launch answers with the app's first screen; later calls default to the app launched last.",
   inputSchema: {
     type: "object",
     properties: {
       action: { type: "string", enum: ACTIONS, description: "What to do" },
       app: { type: "string", description: "Bundle id, or for install the path to a Simulator .app" },
-      value: { type: "string", description: "URL, permission, latitude,longitude, or push text/JSON, per action" },
+      value: { type: "string", description: "URL, permission, lat,long, push text/JSON, light/dark, locale (fr_FR), time zone (Europe/Paris), text size or clean/clear, per action" },
       device: { type: "string", description: "Name or UDID; default: the one in use" },
     },
     required: ["action"],
@@ -83,7 +111,8 @@ export const appControl: Tool = {
     // Every other action works on an installed app: the one named, or the one launched last.
     const bundleId = app ?? (await currentApp(device.udid))?.bundleId;
     if (bundleId && !BUNDLE_ID.test(bundleId)) throw new ToolError(`"${bundleId}" is not a bundle id.`, "A bundle id looks like com.example.app; install takes the path to a .app.");
-    const needsApp = !["open_url", "location", "reset_permissions"].includes(action);
+    // The phone's own settings need no app.
+    const needsApp = !["open_url", "location", "reset_permissions", "appearance", "locale", "timezone", "text_size", "status_bar"].includes(action);
     if (needsApp && !bundleId) throw new ToolError(`${action} needs app: the bundle id.`, "Pass app, or launch the app first.");
 
     switch (action) {
@@ -130,6 +159,44 @@ export const appControl: Tool = {
       case "push":
         await pushPayload(device.udid, bundleId!, pushJson(value!));
         return { text: `Sent a push to ${bundleId}.` };
+      case "appearance": {
+        const mode = value!.trim().toLowerCase();
+        if (mode !== "light" && mode !== "dark") throw new ToolError(`Appearance is "light" or "dark", not "${value}".`);
+        await simctlAction(["ui", device.udid, "appearance", mode], "set the appearance");
+        return { text: `${label} is in ${mode} mode.` };
+      }
+      case "locale": {
+        const { language, locale } = localeParts(value!);
+        await simctlAction(["spawn", device.udid, "defaults", "write", "-g", "AppleLanguages", "-array", language], "set the language");
+        await simctlAction(["spawn", device.udid, "defaults", "write", "-g", "AppleLocale", "-string", locale], "set the region");
+        return { text: `${label}'s language and region are ${language} (${locale}). Apps read them when they launch: relaunch the app (app_control launch).` };
+      }
+      case "timezone": {
+        if (value!.trim() === "clear") {
+          await setDeviceTimeZone(device.udid, undefined);
+          return { text: `Apps launched from now on run in this Mac's time zone again; relaunch the app (app_control launch).` };
+        }
+        const zone = timeZoneName(value!);
+        await setDeviceTimeZone(device.udid, zone);
+        return { text: `Apps simulator-use launches from now on run in ${zone}: relaunch the app (app_control launch). The status bar's clock keeps this Mac's time.` };
+      }
+      case "text_size": {
+        const size = value!.trim().toLowerCase();
+        if (!TEXT_SIZES.includes(size)) throw new ToolError(`"${value}" is not a text size.`, `Use one of: ${TEXT_SIZES.join(", ")}.`);
+        await simctlAction(["ui", device.udid, "content_size", size], "set the text size");
+        return { text: `${label}'s text size is ${size}.` };
+      }
+      case "status_bar": {
+        const mode = value!.trim().toLowerCase();
+        if (mode === "clear") {
+          await simctlAction(["status_bar", device.udid, "clear"], "clear the status bar");
+          return { text: "The status bar shows the real time, signal and battery again." };
+        }
+        if (mode !== "clean") throw new ToolError(`status_bar is "clean" or "clear", not "${value}".`);
+        await simctlAction(["status_bar", device.udid, "override", "--time", "9:41", "--dataNetwork", "wifi", "--wifiMode", "active", "--wifiBars", "3",
+          "--cellularMode", "active", "--cellularBars", "4", "--batteryState", "charged", "--batteryLevel", "100"], "set the status bar");
+        return { text: "The status bar shows 9:41, full signal and a full battery, as App Store screenshots do." };
+      }
       default:
         throw new ToolError(`Unknown action "${action}". Actions: ${ACTIONS.join(", ")}.`);
     }

@@ -7,6 +7,7 @@ import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { ToolError } from "../errors.ts";
 import { run } from "./exec.ts";
 import { stateDir } from "./state.ts";
+import type { Xcode } from "./xcodes.ts";
 import { setting } from "../settings.ts";
 
 export type Project = { kind: "workspace" | "project"; path: string; name: string; dir: string; generated?: boolean; note?: string };
@@ -167,11 +168,20 @@ export function formatIssue(issue: Issue, base: string): string {
  */
 export const cacheDir = () => setting("CACHE_DIR") || stateDir();
 
-/** Each worktree builds into its own DerivedData, so builds stay incremental and never share products. */
-export function derivedDataFor(project: Project): string {
+/**
+ * Each worktree builds into its own DerivedData, so builds stay incremental and never share products; an Xcode other
+ * than the default has its own beside it, since two Xcodes' products and module caches do not mix.
+ */
+export function derivedDataFor(project: Project, xcode?: Xcode): string {
   const key = createHash("sha1").update(project.path).digest("hex").slice(0, 12);
-  return join(cacheDir(), "DerivedData", `${project.name}-${key}`);
+  return join(cacheDir(), "DerivedData", `${project.name}-${key}${xcode && !xcode.default ? `-xcode${xcode.version}${xcode.beta ? "b" : ""}` : ""}`);
 }
+
+/** The environment a build with this Xcode runs in: its DEVELOPER_DIR, unless it is the default. */
+export const xcodeEnv = (xcode?: Xcode): NodeJS.ProcessEnv => (xcode && !xcode.default ? { ...process.env, DEVELOPER_DIR: xcode.developer } : process.env);
+
+/** An Xcode older than the phone's iOS cannot name the phone as a destination: it builds for any Simulator instead. */
+export const noDestination = (result: { tail: string[] }) => result.tail.some((line) => /Unable to find a destination matching/i.test(line));
 
 export type BuildResult = { ok: boolean; errors: Issue[]; warnings: number; log: string; ms: number; tail: string[] };
 
@@ -190,9 +200,9 @@ export async function build(
   project: Project,
   scheme: string,
   udid: string,
-  options: { configuration?: string; clean?: boolean; action?: "build" | "test"; extra?: string[]; onLine?: (line: string) => void; onCancel?: (cancel: () => void) => void },
+  options: { configuration?: string; clean?: boolean; action?: "build" | "test"; extra?: string[]; xcode?: Xcode; destination?: string; onLine?: (line: string) => void; onCancel?: (cancel: () => void) => void },
 ): Promise<BuildResult> {
-  const derived = derivedDataFor(project);
+  const derived = derivedDataFor(project, options.xcode);
   await mkdir(derived, { recursive: true });
   const log = join(derived, `${options.action ?? "build"}-${Date.now()}.log`);
   const args = [
@@ -203,7 +213,7 @@ export async function build(
     "-configuration",
     options.configuration ?? "Debug",
     "-destination",
-    `id=${udid}`,
+    options.destination ?? `id=${udid}`,
     "-derivedDataPath",
     derived,
     ...(options.extra ?? []),
@@ -214,7 +224,7 @@ export async function build(
   const out = createWriteStream(log);
   // Its own process group, so a cancel stops the compilers it started too.
   const [command, commandArgs] = buildCommand(args);
-  const child = spawn(command, commandArgs, { cwd: project.dir, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(command, commandArgs, { cwd: project.dir, detached: true, stdio: ["ignore", "pipe", "pipe"], env: xcodeEnv(options.xcode) });
   options.onCancel?.(() => {
     try {
       process.kill(-child.pid!, "SIGTERM");
@@ -256,8 +266,8 @@ export async function build(
 }
 
 /** The .app a Simulator build made: the scheme's own, never a test runner. */
-export function builtApp(project: Project, scheme: string, configuration = "Debug"): string | undefined {
-  const products = join(derivedDataFor(project), "Build", "Products", `${configuration}-iphonesimulator`);
+export function builtApp(project: Project, scheme: string, configuration = "Debug", xcode?: Xcode): string | undefined {
+  const products = join(derivedDataFor(project, xcode), "Build", "Products", `${configuration}-iphonesimulator`);
   if (!existsSync(products)) return undefined;
   const apps = readdirSync(products).filter((e) => e.endsWith(".app") && !e.endsWith("-Runner.app"));
   const named = apps.find((a) => a === `${scheme}.app`);
@@ -265,7 +275,8 @@ export function builtApp(project: Project, scheme: string, configuration = "Debu
 }
 
 /** What app_run remembers per folder, so the next call needs no arguments. */
-export type Remembered = { project: string; scheme: string; bundleId?: string };
+/** What a folder's last app_run or tests_run used; xcode: the version asked for then, kept for later calls. */
+export type Remembered = { project: string; scheme: string; bundleId?: string; xcode?: string };
 
 const memoryFile = async (dir: string) => {
   const folder = join(stateDir(), "projects");
@@ -303,7 +314,7 @@ export async function setLastProject(project: string): Promise<void> {
  * Which project a call means: the path given; else the current folder's (or what app_run remembered for it);
  * else the one the last call used, so an agent that named a path once can drop it.
  */
-export async function projectFor(path: string | undefined, scheme: string | undefined): Promise<{ project: Project; scheme: string; dir: string; note: string }> {
+export async function projectFor(path: string | undefined, scheme: string | undefined): Promise<{ project: Project; scheme: string; dir: string; note: string; xcode?: string }> {
   const dir = path ?? process.cwd();
   const memory = await remembered(dir);
   let project: Project;
@@ -317,8 +328,8 @@ export async function projectFor(path: string | undefined, scheme: string | unde
     note = `No project in ${dir}; using ${project.name} from the last call (${project.dir}).\n`;
   }
   if (project.note) note += `${project.note}\n`;
-  const rememberedScheme = memory?.project === project.path ? memory.scheme : (await remembered(project.dir))?.scheme;
-  const chosen = await pickScheme(project, scheme ?? rememberedScheme);
+  const known = memory?.project === project.path ? memory : await remembered(project.dir);
+  const chosen = await pickScheme(project, scheme ?? known?.scheme);
   await setLastProject(project.path);
-  return { project, scheme: chosen, dir: path ? dir : project.dir, note };
+  return { project, scheme: chosen, dir: path ? dir : project.dir, note, ...(known?.xcode ? { xcode: known.xcode } : {}) };
 }

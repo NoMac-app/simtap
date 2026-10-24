@@ -63,14 +63,14 @@ Every step is checked, so nothing succeeds silently:
 
 | Tool | CLI | Does |
 |---|---|---|
-| `app_run` | `simulator-use run` | Builds the Xcode project here, installs and launches it, answers with the first screen; errors as `file:line` |
-| `devices` | `simulator-use devices` | Lists the Simulators on this Mac with their runtime, UDID and state |
+| `app_run` | `simulator-use run` | Builds the Xcode project here, installs and launches it, answers with the first screen; errors as `file:line`; `--xcode 26.6` builds with another installed Xcode |
+| `devices` | `simulator-use devices` | Lists the Simulators on this Mac with their runtime, UDID and state, and its Xcodes |
 | `device_use` | `simulator-use use "iPhone 17 Pro"` | Chooses the Simulator the other tools use, booting it (one boot at a time); dark mode, a clean status bar |
-| `app_control` | `simulator-use app launch dev.example.app` | `install`, `launch` (answers with the first screen), `terminate`, `uninstall`, `open_url`; `grant`, `revoke` and `reset_permissions`; `location`; `push` |
+| `app_control` | `simulator-use app launch dev.example.app` | `install`, `launch` (answers with the first screen), `terminate`, `uninstall`, `open_url`; `grant`, `revoke` and `reset_permissions`; `location`; `push`; the phone's `appearance`, `locale`, `timezone`, `text_size` and a clean `status_bar` |
 | `ui_look` | `simulator-use look` | Reads the screen; `find` keeps matching lines, `screenshot` adds a picture, `full` saves the whole tree |
 | `ui_act` | `simulator-use act "tap #signIn" ...` | Does steps in order and answers with what changed |
 | `app_logs` | `simulator-use logs` | The app's print output and its own system log lines; `grep`, `wait_for`, `crashes` |
-| `tests_run` | `simulator-use test` | Runs the unit and UI tests; counts, and each failure as `file:line`; "0 tests ran" is an error |
+| `tests_run` | `simulator-use test` | Runs the unit and UI tests; each case as it finishes, counts, each failure as `file:line` and the slowest; "0 tests ran" is an error |
 | `screen_record` | `simulator-use record start` | Starts or stops a video of the screen; stop answers with the MP4 |
 | `job_status` | `simulator-use job` | Waits up to 40 s for a long build and answers with its result, or its progress |
 | `job_cancel` | `simulator-use cancel` | Stops a job |
